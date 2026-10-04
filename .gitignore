@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.opencode/
+aifail.txt
+planrules.md
+review.md
+CLAUDE.md
+data/vaults/
+data/uploads/
+data/jobs/
+data/backups/
+*.db
+*.db-shm
+*.db-wal
+hold.txt
