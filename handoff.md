@@ -25,14 +25,18 @@ when filling in details. See §7 for the locked spec.
 - **Phase 1 (entity registry) NOT STARTED** — no `entityTypes.js`, no `routes/entityTypes.js`,
   no `notes.entity_symbol` column, no `entity_templates` table. (A prior session did all the
   reading/recon for Phase 1 — see §10 — but stopped in plan mode before writing any code.)
-- Working tree is clean: last commit `cc51a5b`.
-- `git log`:
+- Working tree is clean. HEAD is `d9d0a53`; `master` tracks and is in sync with `origin/main`
+  (0 ahead / 0 behind).
+- `git log` (oldest → newest; first-parent, non-merge — the repo was squashed at the fork):
   - `a0ce05e` DMTool 0.1.0: forked from obsidian-web
   - `cc51a5b` dev: make Vite proxy target env-overridable (DMTL_API_ORIGIN)
+  - `f9ce05e` add handoff.md (state, intent, pipelines, spec, phase 1 design)
+  - `d9d0a53` merge: merge in "repo seed" (README + GPL-3 LICENSE) — **current HEAD = origin/main**
 - **Tests green** (run from repo root): server **297/297**, client **66/66**, 14 server + 5
   client test files.
-- No remote / not pushed (per global rule: never push without explicit direction). `.32` (this
-  box) is where development happens.
+- A real remote, `origin`, now exists (GitHub — see §9) and `master` is in sync with it.
+  Still: **don't push** without Steve's explicit direction (global rule). `.32` (this box) is
+  where development happens.
 
 ---
 
@@ -106,10 +110,13 @@ edit + git push  →  git pull + npm ci + npm run build  →  rsync + nginx -t
   reused; fresh `.env` with new JWT secrets.
 - `.201`: nginx `location /dnd/` — static root `dmtl/client/dist`; proxy `/dnd/api` + `/dnd/ws`
   (with `Upgrade` headers) → `127.0.0.1:3001`; 301 `/dnd` → `/dnd/`; existing TLS cert.
-- Client build for the subpath — the **4 invariants** (from baseline `handoff2.md`):
-  `vite.config.js` `base` + dev proxy keys; `api/client.js` `BASE_URL`-relative `resolve()`;
-  `useWebSocket.js` WS URL; `main.jsx` `BrowserRouter basename`. For DMTool these must all read
-  `/dnd/` (currently hard-coded `/notes/` in the fork — see §8 gotchas).
+- Client build for the subpath — the **4 invariants** (from baseline `handoff2.md`), all of
+  which must resolve to `/dnd/`: `vite.config.js` `base` + dev proxy keys; `api/client.js`
+  `BASE_URL`-relative `resolve()`; `useWebSocket.js` WS URL; `main.jsx` `BrowserRouter basename`.
+  In practice only **`vite.config.js` is the hard-coded set** (today `/notes/`, the fork's
+  transitional subpath) — the other three derive from `BASE_URL` and follow automatically.
+  Change `base` + the proxy keys to `/dnd/`; leave the `BASE_URL`-relative code untouched.
+  (Detail + exact code in §6.)
 
 **Sanity check before touching nginx (per baseline checklist, rewritten for `/dnd/`):**
 ```
@@ -130,13 +137,19 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
   (`notes`, `links`, `tags`, FTS5), plus `notebooks`, `templates`, `jobs`, etc. `indexService.js`
   (`indexNote`) upserts the `notes` row, re-extracts `[[wikilinks]]` into `links` and `#tags`
   into `tags`, and rebuilds the FTS row. **This is the integration point for Phase 1/2.**
-- **Client build invariants** (must hold for any subpath; `base: '/notes/'` today):
-  - `vite.config.js`: `base` + dev proxy keys `/notes/api`,`/notes/ws` (rewrite strips `/notes`).
-  - `src/api/client.js`: `BASE` from `BASE_URL` (trailing slash stripped); every fetch via
-    `resolve(url)`. `BASE_URL` ends in `/` — never concatenate an absolute path directly
-    (`/notes//api/...` breaks `location ^~`).
-  - `src/hooks/useWebSocket.js`: WS URL `${proto}://${location.host}/notes/ws`.
-  - `src/main.jsx`: `BrowserRouter basename="/notes"`.
+- **Client build invariants** (must hold for any subpath — `/dnd/` once deployed). Today all
+  read the fork's transitional `base: '/notes/'`. Change **`vite.config.js`'s `base` in one
+  place**; `client.js` / `useWebSocket.js` / `main.jsx` derive from `BASE_URL` so they follow
+  automatically. **Do not hard-code the subpath in those three files.**
+  - `vite.config.js`: `base` **and** the dev proxy keys (today `/notes/api`, `/notes/ws`, with
+    rewrite stripping `/notes`) — both must be set to the target subpath (e.g. `/dnd/`).
+  - `src/api/client.js`: `BASE = BASE_URL` (trailing slash stripped); every fetch via `resolve(url)`.
+    `BASE_URL` ends in `/` — never concatenate an absolute path directly (e.g. `/dnd//api/...`
+    would break `location ^~`).
+  - `src/hooks/useWebSocket.js` (`useWebSocket.js:21-22`):
+    `const base = import.meta.env.BASE_URL.replace(/\/$/, '');` then
+    `new WebSocket(`${proto}://${location.host}/${base}/ws`)`.
+  - `src/main.jsx:18`: `BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}`.
 - **Preview rendering** (`components/editor/NotePreview.jsx`): `[[Target|Alias]]` is preprocessed
   (string `replace`, `WIKILINK_RE`) into `[Alias](wiki:Target)` **before** ReactMarkdown sees it;
   the `wiki:` protocol is allow-listed in the sanitize schema; link clicks call
@@ -240,9 +253,11 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
 
 - **Dev (this box)**: you are the repo owner. Plain `git commit` / `git push`.
 - **GitHub**: account token via credential helper (already configured on this box). Do **not**
-  copy tokens onto `.202`. `git ls-remote origin HEAD` is the quick push-path health check
-  (note `origin` is still the baseline's remote until Steve says to point at a DMTool repo —
-  see §5; for now there is no real remote to push to).
+  copy tokens onto `.202`. `git ls-remote origin HEAD` is the quick push-path health check.
+  `origin` is the DMTool repo — `https://github.com/Jabmist/DMTool.git` (not the baseline) —
+  and local branch `master` tracks `origin/main` (the remote's default branch is `main`; the
+  local branch name is `master`, so a plain `git push` pushes `master → main` via
+  `push.default=simple`).
 - **`/home/steve/source/Obsidian`** is the untouched baseline — read-only reference for you.
 - Ollama AI server: `http://192.168.1.173:11434`, model `qwen3.8` (same as baseline `.env`).
 
