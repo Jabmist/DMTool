@@ -1,8 +1,8 @@
 # DMTool — Handoff (2026-10-04)
 
-Read this top-to-bottom to get fully up to speed. This file is the single source of
-truth for *state + intent + conventions*; the phase-by-phase task list lives in
-`/home/steve/source/Obsidian/DMTool-PLAN.md`.
+Read this top-to-bottom to get fully up to speed. Current *state* is read from git
+(`git log`, `git status`, the phase checkboxes in `DMTool-PLAN.md` at repo root); this
+file is the single source of truth for *intent + conventions*.
 
 ---
 
@@ -15,32 +15,11 @@ baseline (`/home/steve/source/Obsidian`) is untouched and stays the reference.
 
 The DMTool layer (not yet built — Phases 1–3) adds **typed entities** for a campaign:
 each game "entity" kind gets a notebook, a template, symbol-based links, and AI-assist
-when filling in details. See §7 for the locked spec.
+when filling in details. See §6 for the locked spec.
 
 ---
 
-## 2. Current status (as of this handoff)
-
-- **Phase 0 (scaffold + fork) is COMPLETE and green.**
-- **Phase 1 (entity registry) NOT STARTED** — no `entityTypes.js`, no `routes/entityTypes.js`,
-  no `notes.entity_symbol` column, no `entity_templates` table. (A prior session did all the
-  reading/recon for Phase 1 — see §10 — but stopped in plan mode before writing any code.)
-- Working tree is clean. HEAD is `d9d0a53`; `master` tracks and is in sync with `origin/main`
-  (0 ahead / 0 behind).
-- `git log` (oldest → newest; first-parent, non-merge — the repo was squashed at the fork):
-  - `a0ce05e` DMTool 0.1.0: forked from obsidian-web
-  - `cc51a5b` dev: make Vite proxy target env-overridable (DMTL_API_ORIGIN)
-  - `f9ce05e` add handoff.md (state, intent, pipelines, spec, phase 1 design)
-  - `d9d0a53` merge: merge in "repo seed" (README + GPL-3 LICENSE) — **current HEAD = origin/main**
-- **Tests green** (run from repo root): server **297/297**, client **66/66**, 14 server + 5
-  client test files.
-- A real remote, `origin`, now exists (GitHub — see §9) and `master` is in sync with it.
-  Still: **don't push** without Steve's explicit direction (global rule). `.32` (this box) is
-  where development happens.
-
----
-
-## 3. Stack (unchanged from baseline)
+## 2. Stack (unchanged from baseline)
 
 - **Server**: Node 22 (v22.22.2), Express 5, `better-sqlite3` v12 (WAL), ESM. No build step —
   `node --watch --env-file=../.env src/index.js`.
@@ -56,7 +35,7 @@ Useful root scripts: `npm run dev`, `npm run build`, `npm run start`, `npm run t
 
 ---
 
-## 4. Environment & local dev
+## 3. Environment & local dev
 
 - `.env` (gitignored) — data paths point at **the fork's own** `data/` (independent of the
   baseline, deliberately):
@@ -93,7 +72,7 @@ edit  →  npm run dev (in repo root)  →  npm run test   →  git add/commit
 
 ---
 
-## 5. Deployment pipeline (for later — Phase 4)
+## 4. Deployment pipeline (for later — Phase 4)
 
 Not deployed yet. When it is, mirror the `obsidian-web` pattern (documented in the baseline's
 `handoff2.md` and `SETUP.md`, both also copied into this repo's context):
@@ -116,7 +95,7 @@ edit + git push  →  git pull + npm ci + npm run build  →  rsync + nginx -t
   In practice only **`vite.config.js` is the hard-coded set** (today `/notes/`, the fork's
   transitional subpath) — the other three derive from `BASE_URL` and follow automatically.
   Change `base` + the proxy keys to `/dnd/`; leave the `BASE_URL`-relative code untouched.
-  (Detail + exact code in §6.)
+  (Detail + exact code in §5.)
 
 **Sanity check before touching nginx (per baseline checklist, rewritten for `/dnd/`):**
 ```
@@ -125,7 +104,7 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
 
 ---
 
-## 6. Conventions & gotchas (do not regress)
+## 5. Conventions & gotchas (do not regress)
 
 - **Single source of truth for version + changelog**: `client/src/version.js`.
   `APP_VERSION = '0.1.0'` here; the changelog was **reset to the fork point** (v0.1.0
@@ -162,7 +141,7 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
 
 ---
 
-## 7. Locked spec (Phase 1+ — do not re-litigate without Steve)
+## 6. Locked spec (Phase 1+ — do not re-litigate without Steve)
 
 - **Folder**: `~/source/DMTool`.
 - **Entity types — FIXED set, v1.** Six kinds with collision-free *inline* symbols. A formed
@@ -228,7 +207,7 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
 
 ---
 
-## 8. Key file map (DMTool = same as baseline; only these are DMTool-specific/changed)
+## 7. Key file map (DMTool = same as baseline; only these are DMTool-specific/changed)
 
 - `client/vite.config.js` — the ONLY client file changed in the fork (env-overridable dev proxy,
   commit `cc51a5b`). Default behaviour identical to baseline.
@@ -249,7 +228,7 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
 
 ---
 
-## 9. Credentials & access
+## 8. Credentials & access
 
 - **Dev (this box)**: you are the repo owner. Plain `git commit` / `git push`.
 - **GitHub**: account token via credential helper (already configured on this box). Do **not**
@@ -263,13 +242,13 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
 
 ---
 
-## 10. How to pick up where this left off
+## 9. How to pick up where this left off
 
-1. Read `handoff.md` (this file). Then the task list:
-   `/home/steve/source/Obsidian/DMTool-PLAN.md` → §3 **Phase 1** is the next work.
-2. Re-run `npm run test` from the repo root (expect server 297 / client 66 green). Start the
-   server (`npm run dev`, side-by-side command in §4 if the baseline is on 3000).
-3. Implement Phase 1 per §7: `entityTypes.js` → `db` migration → `routes/entityTypes.js` +
+1. You're reading `handoff.md`; next read the task list: `DMTool-PLAN.md` (repo root)
+   → §3 **Phase 1** is the next work.
+2. Re-run `npm run test` from the repo root — everything green before you start. Start the
+   server (`npm run dev`, side-by-side command in §3 if the baseline is on 3000).
+3. Implement Phase 1 per §6: `entityTypes.js` → `db` migration → `routes/entityTypes.js` +
    mount in `index.js` → `auth.js` register/seeding → **update the two baseline
    empty-collection test asserts** → add the new Phase 1 tests → `npm run test` green → commit.
 4. Phase 2 (client symbol-link picker + `NotePreview` entity-link preprocess + `indexService`

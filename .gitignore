@@ -3,6 +3,7 @@ dist/
 .env
 .opencode/
 aifail.txt
+.~lock*
 planrules.md
 review.md
 CLAUDE.md
