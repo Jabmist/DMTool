@@ -5,6 +5,7 @@ import remarkDirective from 'remark-directive';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { api } from '../../api/client.js';
+import { preprocessEntityLinks } from './entityLinks.js';
 
 // Allow only colour/length CSS values; reject url() and other unsafe patterns.
 const isNumber = (v) =>
@@ -151,6 +152,21 @@ function preprocessWikilinks(content) {
   });
 }
 
+// Both link forms emit standard [label](wiki:Name) markdown on the allow-listed
+// `wiki:` protocol, so NotePreview's link handler resolves every one of them
+// through `GET /api/notes/resolve?title=`. Entities are rewritten first (raw),
+// then wikilinks convert to `[label](wiki:Target)` — the wikilink's
+// `[^]|#]+` capture takes the entity's markdown link as *target* text (which
+// is the baseline contract for `[[wikilink content]]` — content is taken
+// verbatim; the user's `[[Target]]` semantics are unchanged for ordinary text
+// because entity-link spans are rare inside wikilinks, and the result still
+// renders as a clickable link to the outer wikilink's target). Entity links
+// MUST be rewritten before remark parses, so $$Item$$ and ++Player++ don't hit
+// GFM emphasis/strikethrough.
+function preprocessLinks(content) {
+  return preprocessWikilinks(preprocessEntityLinks(content));
+}
+
 export default function NotePreview({ content, onNavigate }) {
   const scrollRef = useRef(null);
 
@@ -246,7 +262,7 @@ export default function NotePreview({ content, onNavigate }) {
             },
           }}
         >
-          {preprocessWikilinks(content)}
+          {preprocessLinks(content)}
         </ReactMarkdown>
       </div>
     </div>

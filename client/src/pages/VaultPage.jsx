@@ -171,7 +171,7 @@ export default function VaultPage() {
           onClose={() => setSidebarOpen(false)}
         />
         <main className="main-content" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {view === 'editor'    && <Editor notePath={activePath} notebookId={activeNotebookId} onNavigate={path => handleSelectNote(path, null)} onDelete={handleNoteDeleted} onRename={handleNoteRenamed} mode={editorMode} onModeChange={setEditorMode} notebooks={notebooks} onNotebookChange={() => { setSidebarRefreshKey(k => k + 1); setNotebookColorKey(k => k + 1); }} />}
+          {view === 'editor'    && <Editor notePath={activePath} notebookId={activeNotebookId} onNavigate={path => handleSelectNote(path, null)} onDelete={handleNoteDeleted} onRename={handleNoteRenamed} mode={editorMode} onModeChange={setEditorMode} notebooks={notebooks} onNotebookChange={() => { setSidebarRefreshKey(k => k + 1); setNotebookColorKey(k => k + 1); }} onEntityCreated={() => { setSidebarRefreshKey(k => k + 1); setNotebooksKey(k => k + 1); }} />}
           {view === 'graph'     && <GraphView activePath={activePath} notebookColorKey={notebookColorKey} onSelectNote={(p, nbId) => { handleSelectNote(p, nbId ?? null); setEditorMode('preview'); setView('editor'); }} isMobile={isMobile} />}
           {view === 'dissect'   && <DissectPanel dissectJob={dissectJob} onDissectJobChange={setDissectJob} onComplete={() => setView('editor')} />}
           {view === 'import'    && <ImportPanel onComplete={() => setView('editor')} />}

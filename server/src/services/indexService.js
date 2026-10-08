@@ -1,6 +1,6 @@
 import { getDb } from '../db/index.js';
 import { readNote, listNotes } from './fileService.js';
-import { ENTITY_SYMBOLS } from '../entityTypes.js';
+import { ENTITY_TYPES, ENTITY_SYMBOLS, linkRegex } from '../entityTypes.js';
 import path from 'path';
 
 const WIKILINK_RE = /\[\[([^\]|#]+)(?:\|([^\]]+))?\]\]/g;
@@ -15,10 +15,28 @@ function extractTitle(notePath) {
   return path.basename(notePath, '.md');
 }
 
+function stripFrontmatter(content) {
+  return content.replace(/^---\n[\s\S]*?\n---\n?/, '');
+}
+
 function extractLinks(content) {
   const links = [];
   for (const m of content.matchAll(WIKILINK_RE)) {
     links.push({ target: m[1].trim(), label: m[2]?.trim() ?? null });
+  }
+  // DMTool entity links (Phase 2): every `&sym Name &sym` form the same flat,
+  // untyped shape as a wikilink — target = the entity's display name, so resolve-
+  // by-title, backlinks and the graph all work unchanged (no `link_type` column,
+  // per Q2's display rule). Frontmatter is excluded since only one `entity:` line
+  // may appear and the `name` capture class never spans `&&Name&&`.
+  const body = stripFrontmatter(content);
+  for (const t of ENTITY_TYPES) {
+    for (const m of body.matchAll(linkRegex(t.symbol))) {
+      const name = m[1].trim();
+      if (!name) continue;
+      if (links.some(l => l.target === name)) continue;
+      links.push({ target: name, label: null });
+    }
   }
   return links;
 }

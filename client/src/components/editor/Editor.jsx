@@ -8,12 +8,14 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import { api } from '../../api/client.js';
 import BacklinksPanel from './BacklinksPanel.jsx';
 import { wikilinkCompletion } from './wikilinkComplete.js';
+import { entityCompletion } from './symbolLinkComplete.js';
+import { setNewEntityHandler, clearNewEntityHandler } from './entityLinkBridge.js';
 import NotePreview from './NotePreview.jsx';
 import EditorToolbar from './EditorToolbar.jsx';
 
 const SAVE_DEBOUNCE_MS = 1000;
 
-export default function Editor({ notePath, notebookId, onNavigate, onDelete, onRename, mode = 'edit', onModeChange, notebooks, onNotebookChange }) {
+export default function Editor({ notePath, notebookId, onNavigate, onDelete, onRename, mode = 'edit', onModeChange, notebooks, onNotebookChange, onEntityCreated }) {
   const editorRef = useRef(null);
   const viewRef = useRef(null);
   const saveTimer = useRef(null);
@@ -35,6 +37,9 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
   const [savingTpl, setSavingTpl] = useState(false);
   const [tplName, setTplName] = useState('');
   const tplInputRef = useRef(null);
+  // Entity "New…" prompt (Phase 2): shown when the picker's New… row is chosen.
+  const [entityPrompt, setEntityPrompt] = useState(null); // { type, name, error }
+  const entityInputRef = useRef(null);
 
   // Derive role for the active shared notebook
   const activeNotebook = notebookId ? (notebooks ?? []).find(n => n.id === notebookId) : null;
@@ -66,6 +71,25 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
     if (savingTpl) tplInputRef.current?.select();
   }, [savingTpl]);
 
+  useEffect(() => {
+    if (entityPrompt) entityInputRef.current?.focus();
+  }, [entityPrompt]);
+
+  // Register the bridge handler so the CodeMirror picker's **New…** row can ask
+  // this component to show the name prompt for a given type. Unregister on unmount.
+  // The picker's `from` is the absolute position right after the opening pair;
+  // we also record the cursor head at selection time so we can replace the
+  // entire range [from, head] when we insert the final link — including any
+  // partially-typed name the user started before picking New…
+  const openEntityPrompt = useCallback((type, from) => {
+    const head = viewRef.current ? viewRef.current.state.selection.main.head : from;
+    setEntityPrompt({ type, from, head, name: '', error: '' });
+  }, []);
+  useEffect(() => {
+    setNewEntityHandler(openEntityPrompt);
+    return () => clearNewEntityHandler(openEntityPrompt);
+  }, [openEntityPrompt]);
+
   function startSaveTemplate() {
     const name = notePath ? notePath.replace(/\.md$/, '').split('/').pop() : '';
     setTplName(name);
@@ -83,6 +107,38 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
       setTimeout(() => setStatus(''), 1500);
     } catch (e) {
       setStatus(`Template save failed: ${e.message}`);
+    }
+  }
+
+  // Phase 2 entity creation via the picker's **New…** row. Create through the
+  // POST /api/entity-types/:symbol endpoint (which auto-files the note into the
+  // type's seed notebook and applies its template), then insert the full link
+  // at the cursor: `&sym Name &sym`.  On success, refresh the sidebar tree so
+  // the new note appears immediately.
+  async function submitEntityPrompt() {
+    const prompt = entityPrompt;
+    setEntityPrompt(null);
+    if (!prompt) return;
+    const name = prompt.name.trim();
+    if (!name) return;
+    try {
+      const d = await api.post(`/api/entity-types/${encodeURIComponent(prompt.type.symbol)}`, { name });
+      const created = d.name ?? name;
+      const view = viewRef.current;
+      if (view) {
+        const from = prompt.from ?? (view.state.selection.main.head - prompt.type.pair.length);
+        const to = prompt.head ?? view.state.selection.main.head;
+        const insert = `${created}${prompt.type.pair}`;
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
+        });
+      }
+      setStatus(`Created ${prompt.type.label} “${created}”`);
+      setTimeout(() => setStatus(''), 2500);
+      onEntityCreated?.();
+    } catch (e) {
+      setEntityPrompt({ ...prompt, error: e.message });
     }
   }
 
@@ -143,6 +199,7 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
         highlightActiveLine(),
         EditorView.lineWrapping,
         wikilinkCompletion,
+        entityCompletion,
         updateListener,
       ],
     });
@@ -218,6 +275,36 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {entityPrompt && (
+        <div style={{
+          padding: '8px 16px', borderBottom: '1px solid var(--border)',
+          background: 'rgba(124,106,247,0.08)',
+          display: 'flex', flexDirection: 'column', gap: 4,
+        }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            New <strong style={{ color: 'var(--accent)' }}>{entityPrompt.type.label}</strong>
+            <span style={{ marginLeft: 6, fontFamily: 'var(--font-mono)' }}>{entityPrompt.type.pair}Name{entityPrompt.type.pair}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              ref={entityInputRef}
+              value={entityPrompt.name}
+              placeholder={`${entityPrompt.type.label} name…`}
+              onChange={e => setEntityPrompt(p => p && { ...p, name: e.target.value, error: '' })}
+              onKeyDown={e => {
+                if (e.key === 'Enter') submitEntityPrompt();
+                if (e.key === 'Escape') setEntityPrompt(null);
+              }}
+              style={{ fontSize: 12, flex: 1 }}
+            />
+            <button onClick={submitEntityPrompt} style={{ padding: '4px 10px', fontSize: 12 }}>Create</button>
+            <button className="secondary" onClick={() => setEntityPrompt(null)} style={{ padding: '4px 10px', fontSize: 12 }}>Cancel</button>
+          </div>
+          {entityPrompt.error && (
+            <div style={{ fontSize: 11, color: 'var(--danger)' }}>{entityPrompt.error}</div>
+          )}
+        </div>
+      )}
       <div style={{
         padding: '4px 16px', borderBottom: '1px solid var(--border)',
         fontSize: 12, color: 'var(--text-muted)',

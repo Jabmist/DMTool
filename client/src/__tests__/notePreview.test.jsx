@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
+import { preprocessEntityLinks } from '../components/editor/entityLinks.js';
 
 // ── Wikilink preprocessing (pure function — extracted for direct testing) ──────
 const WIKILINK_RE = /\[\[([^\]|#]+)(?:\|([^\]]+))?\]\]/g;
@@ -37,6 +38,37 @@ describe('preprocessWikilinks', () => {
 
   it('trims whitespace around target and alias', () => {
     expect(preprocessWikilinks('[[ Target | Label ]]')).toBe('[Label](wiki:Target)');
+  });
+});
+
+// ── Entity-link preprocessing (pure function) ─────────────────────────────────
+describe('preprocessEntityLinks', () => {
+  it('rewrites each of the six doubled-symbol forms to a wiki: link', () => {
+    const out = preprocessEntityLinks('a &&Borg the Black&& b !!Council Summit!! c');
+    expect(out).toContain('[Borg the Black](wiki:Borg%20the%20Black)');
+    expect(out).toContain('[Council Summit](wiki:Council%20Summit)');
+  });
+
+  it('percent-encodes spaces in the name', () => {
+    expect(preprocessEntityLinks('@@Small town@@')).toBe('[Small town](wiki:Small%20town)');
+  });
+
+  it('does not touch markdown bold (single * / **)', () => {
+    expect(preprocessEntityLinks('**bold** text')).toBe('**bold** text');
+  });
+
+  it('does not treat a mismatched pair as a link', () => {
+    expect(preprocessEntityLinks('!!open@@close')).toBe('!!open@@close');
+  });
+
+  it('does not treat a stray single symbol or unclosed pair as a link', () => {
+    expect(preprocessEntityLinks('c++ and ++ is raw')).toBe('c++ and ++ is raw');
+    expect(preprocessEntityLinks('&& unclosed name')).toBe('&& unclosed name');
+  });
+
+  it('handles all six on one line together', () => {
+    const out = preprocessEntityLinks('@@Loc@@ &&Npc&& $$Item$$ ^^Trap^^ ++Player++ !!Event!!');
+    expect(out).toBe('[Loc](wiki:Loc) [Npc](wiki:Npc) [Item](wiki:Item) [Trap](wiki:Trap) [Player](wiki:Player) [Event](wiki:Event)');
   });
 });
 
@@ -79,6 +111,21 @@ describe('NotePreview', () => {
     const link = await screen.findByRole('link', { name: 'Unknown Note' });
     fireEvent.click(link);
     await waitFor(() => expect(onNavigate).toHaveBeenCalledWith('Unknown Note.md'));
+  });
+
+  it('renders entity links as clickable anchors', async () => {
+    render(<NotePreview content="Visit &&Borg the Black&&" onNavigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Borg the Black' })).toBeInTheDocument());
+  });
+
+  it('resolves an entity link via the resolve endpoint on click', async () => {
+    api.get.mockResolvedValue({ path: 'entities/npc/Borg the Black.md' });
+    const onNavigate = vi.fn();
+    render(<NotePreview content="Visit &&Borg the Black&&" onNavigate={onNavigate} />);
+    const link = await screen.findByRole('link', { name: 'Borg the Black' });
+    fireEvent.click(link);
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith('entities/npc/Borg the Black.md'));
+    expect(api.get).toHaveBeenCalledWith(expect.stringContaining('/api/notes/resolve?title=Borg%20the%20Black'));
   });
 
   it('renders GFM tables', async () => {

@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/authStore.js';
 import NotebookShareDialog from '../notebooks/NotebookShareDialog.jsx';
 import ChangePasswordDialog from './ChangePasswordDialog.jsx';
 import { APP_VERSION } from '../../version.js';
+import { ENTITY_TYPES } from '../editor/symbolPalette.js';
 
 function NoteRow({ path, indent, activePath, onSelect, onViewChange, onClose, updated }) {
   const label = path.replace(/\.md$/, '').split('/').pop();
@@ -50,6 +51,12 @@ export default function Sidebar({ activePath, onSelect, onViewChange, activeView
   const [confirmDeleteNb, setConfirmDeleteNb]   = useState(null); // { id, name }
   const [shareDialogNb, setShareDialogNb]       = useState(null); // notebook object
   const [changePwOpen, setChangePwOpen]         = useState(false);
+  // Phase 2: "Create entity" flow — pick a type, name it, POST /api/entity-types/:symbol.
+  const [creatingEntity, setCreatingEntity]     = useState(false);
+  const [entitySymbol, setEntitySymbol]         = useState('!');
+  const [entityName, setEntityName]             = useState('');
+  const [entityError, setEntityError]           = useState('');
+  const entityInputRef = useRef(null);
   const logout = useAuthStore(s => s.logout);
   const user   = useAuthStore(s => s.user);
   const navigate = useNavigate();
@@ -72,6 +79,7 @@ export default function Sidebar({ activePath, onSelect, onViewChange, activeView
 
   useEffect(() => { if (creating) newInputRef.current?.focus(); }, [creating]);
   useEffect(() => { if (creatingNotebook) notebookInputRef.current?.focus(); }, [creatingNotebook]);
+  useEffect(() => { if (creatingEntity) entityInputRef.current?.focus(); }, [creatingEntity]);
 
   function toggleExpand(id) {
     setExpanded(prev => {
@@ -164,6 +172,40 @@ export default function Sidebar({ activePath, onSelect, onViewChange, activeView
     }
   }
 
+  // Phase 2: create an entity directly from the sidebar.
+  function startCreatingEntity() {
+    setCreatingEntity(true);
+    setEntitySymbol('!');
+    setEntityName('');
+    setEntityError('');
+  }
+
+  function cancelEntityCreate() {
+    setCreatingEntity(false);
+    setEntityError('');
+  }
+
+  async function handleCreateEntity(e) {
+    e?.preventDefault();
+    const name = entityName.trim();
+    if (!name) {
+      setEntityError('Name required');
+      entityInputRef.current?.focus();
+      return;
+    }
+    setEntityError('');
+    try {
+      const d = await api.post(`/api/entity-types/${encodeURIComponent(entitySymbol)}`, { name });
+      cancelEntityCreate();
+      onSelect(d.path, null);
+      onViewChange('editor');
+      onModeChange?.('edit');
+      await fetchTree();
+    } catch (err) {
+      setEntityError(err.message);
+    }
+  }
+
   async function handleCreateNotebook(e) {
     e.preventDefault();
     const name = newNotebookName.trim();
@@ -235,7 +277,47 @@ export default function Sidebar({ activePath, onSelect, onViewChange, activeView
         >
           +
         </button>
+        <button
+          onClick={() => startCreatingEntity()}
+          title="New entity (NPC, location, item, trap, event, player)"
+          style={{
+            padding: '4px 8px', flexShrink: 0, fontSize: 10, fontWeight: 600,
+            letterSpacing: '0.06em', textTransform: 'uppercase',
+            color: 'var(--accent)',
+          }}
+        >
+          New entity
+        </button>
       </div>
+
+      {/* Inline new-entity form (Phase 2) */}
+      {creatingEntity && (
+        <form onSubmit={handleCreateEntity} style={{ padding: '6px 8px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <select
+              value={entitySymbol}
+              onChange={e => setEntitySymbol(e.target.value)}
+              style={{ fontSize: 11 }}
+            >
+              {ENTITY_TYPES.map(t => (
+                <option key={t.symbol} value={t.symbol}>{t.label}</option>
+              ))}
+            </select>
+            <input
+              ref={entityInputRef}
+              placeholder="Entity name…"
+              value={entityName}
+              onChange={e => { setEntityName(e.target.value); setEntityError(''); }}
+              onKeyDown={e => e.key === 'Escape' && cancelEntityCreate()}
+              style={{ fontSize: 12, flex: 1, borderColor: entityError ? 'var(--danger)' : undefined }}
+            />
+            <button type="submit" style={{ padding: '4px 8px', fontSize: 12 }}>Create</button>
+          </div>
+          {entityError && (
+            <div style={{ fontSize: 11, color: 'var(--danger)' }}>{entityError}</div>
+          )}
+        </form>
+      )}
 
       {/* Inline new-note form */}
       {creating && (

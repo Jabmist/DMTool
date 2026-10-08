@@ -707,37 +707,38 @@ Consequences for subtasks (fold in):
 | 1.9 | Update the two baseline test asserts (`notebooks.routes.test.js:70` → expect 6 seeded notebooks; `templates.routes.test.js:21` → expect 6 seeded templates). | 1.8 | D10 (already decided) |
 | 1.10 | Full integration: run `npm run test` (server + client), fix any cross-test interference, commit. | 1.1–1.9 | — |
 
-## 4. Phase 2 — Symbol-link editing UX [ ]
+## 4. Phase 2 — Symbol-link editing UX [x]  (done 2026-10-08)
 
-- [ ] `client/src/components/editor/symbolLinkComplete.js` (new, beside `wikilinkComplete.js`):
-      CodeMirror CompletionSource triggered when text before cursor matches
-      `(!!|@@|&&|$$|^^|\+\+)` and that pair was just typed (guard: don't fire on mid-word
-      `++` like C++ code — require line-start or whitespace before the pair, and require the
-      pair to be a *complete* typed run; refine after first pass).
-      Options: pinned **New…** row at top + that type's notes (fetch `GET /api/entity-types/:symbol/notes`).
-      - Existing note → insert `&sym Name &sym` (i.e. complete the closing pair).
-      - New → small inline name prompt (CodeMirror dialog or a modal component) →
-        `POST /api/entity-types/:symbol` → insert link with returned name.
-- [ ] Preview (`components/editor/NotePreview.jsx`): extend `preprocessWikilinks()` (or add
-      `preprocessEntityLinks()` alongside) — rewrite each `&sym Name &sym` → `[Name](wiki:Name)`
-      using the same `wiki:` protocol + `resolve` endpoint, so clicks navigate via existing
-      `onNavigate` path. Must run BEFORE remark-gfm parses (so `$$x$$` is not treated as
-      anything, `++x++` is not bold — verify against the 6 forms).
-      **Display rule (from Q2 2026-10-05)**: render each template section (e.g. Event's
-      `Prerequisites` and `Follow-ups`, Location's `Events here`, NPC's `Events`) as its own
-      `##`-headed block with its own list of symbol links. Do NOT collapse these into a
-      generic "Backlinks" panel, even where the link is conceptually bidirectional.
-- [ ] Server extraction (`services/indexService.js`): alongside the `[[ ]]` extractor add an
-      entity-link extractor using `linkRegex()` from entityTypes.js → rows in `links` table
-      (same shape, so backlinks + graph + FTS work unchanged). Strip entity-link spans from
-      the text before FTS indexing? (check what `[[ ]]` does and mirror it.)
-- [ ] Sidebar "new note" flow: offer "create entity" → pick type from the 6 → name → same
-      `POST /api/entity-types/:symbol` endpoint.
-- [ ] `pages/helpContent.js`: document the six symbols, link form, autocomplete trigger,
-      New… flow, per-type templates.
-- [ ] Browser test (dev server): type `&&` → list appears → pick new "Borg the Black" →
-      link `&&Borg the Black&&` inline in note; preview renders clickable link; backlinks
-      panel of the NPC note shows the source note. Repeat sanity for all six symbols.
+- [x] `client/src/components/editor/symbolLinkComplete.js` (new, beside `wikilinkComplete.js`)
+      + `symbolPalette.js` (client registry mirror + `parseTrigger` trigger guard) +
+      `entityLinkBridge.js` (New… hand-off to the Editor). CodeMirror CompletionSource triggered
+      when the text before the cursor is a doubled-symbol pair at a clean word boundary
+      (`parseTrigger` — `c++`, `word&&x` do NOT fire; line-start/whitespace do). Options: pinned
+      **New…** row + that type's notes (fetch `GET /api/entity-types/:symbol/notes`, live-filtered
+      by the name typed after the pair).
+      - Existing note → replace the typed range with `Name&sym` (opening pair kept, closing pair appended).
+      - New → the Editor's inline name prompt (Editor owns `viewRef` + prompt state) →
+        `POST /api/entity-types/:symbol` → insert `Name&sym` from the recorded `from`.
+- [x] Preview (`NotePreview.jsx`): `entityLinks.js` `preprocessEntityLinks()` rewrites each
+      `&sym Name &sym` → `[Name](wiki:Name)` using the existing `wiki:` protocol + `resolve`
+      endpoint (clicks navigate via the same `onNavigate` path). Runs BEFORE remark-gfm parses
+      (so `$$x$$`/`++x++` don't hit GFM emphasis). Both wikilink + entity passes run in
+      `preprocessLinks()`. Display rule (Q2) holds — entity sections are `##`-headed blocks in the
+      note body; the extractor stays flat/untyped (no `link_type` column).
+- [x] Server extraction (`services/indexService.js`): `extractLinks()` now also runs each type's
+      `linkRegex()` over the frontmatter-stripped body → rows in `links` (same flat shape as
+      `[[ ]]`, so backlinks + graph + FTS work unchanged). Mirrors `[[ ]]` (no span stripping — the
+      baseline indexes link text into FTS too). Frontmatter excluded.
+- [x] Sidebar: **New entity** button → pick one of the six → name → `POST /api/entity-types/:symbol`
+      → opens the created note + refreshes the tree.
+- [x] `pages/helpContent.js`: new **Entities** section — the six symbols, link form, autocomplete
+      trigger + New… flow, per-type templates, sidebar create. Graph help line updated.
+- [x] Tests: `symbolPalette.test.js` (trigger/filter/url), entity-link cases added to
+      `notePreview.test.jsx` (pure + rendered click), `indexService.test.js` (all six links, null
+      label, backlinks, C++ guard, frontmatter exclusion). `npm run test` green: server 351, client 83.
+- [ ] Browser test (dev server, manual — Steve): type `&&` → list appears → pick new "Borg the
+      Black" → link `&&Borg the Black&&` inline; preview renders a clickable link; the NPC note's
+      backlinks pane shows the source note. Repeat sanity for all six symbols.
 
 ## 5. Phase 3 — AI assist [ ]
 

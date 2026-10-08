@@ -36,6 +36,53 @@ describe('indexNote', () => {
     );
   });
 
+  it('extracts all six entity-link forms into links (flat, untyped)', async () => {
+    const { getDb } = await import('../db/index.js');
+    const content = [
+      'Linking !!Event A!!, @@Loc B@@, &&Npc C&&, $$Item D$$, ^^Trap E^^, and ++Player F++.',
+    ].join('\n');
+    await writeNote(1, 'AllSix.md', content);
+    await indexNote(1, 'AllSix.md');
+    const targets = getDb().prepare('SELECT target_title FROM links WHERE user_id=1').all().map(r => r.target_title);
+    expect(targets).toEqual(
+      expect.arrayContaining(['Event A', 'Loc B', 'Npc C', 'Item D', 'Trap E', 'Player F']),
+    );
+  });
+
+  it('stores entity links with a null label (untyped)', async () => {
+    const { getDb } = await import('../db/index.js');
+    await writeNote(1, 'EntSrc.md', 'Visit &&Borg the Black&&');
+    await indexNote(1, 'EntSrc.md');
+    const link = getDb().prepare('SELECT target_title, label FROM links WHERE user_id=1').get();
+    expect(link).toEqual({ target_title: 'Borg the Black', label: null });
+  });
+
+  it('entity links produce backlinks like wikilinks', async () => {
+    await writeNote(1, 'Visitor.md', 'I met &&Borg the Black&&');
+    await writeNote(1, 'entities/npc/Borg the Black.md', '---\nentity: &\n---\n\n## Description\nAn NPC.');
+    await indexNote(1, 'Visitor.md');
+    await indexNote(1, 'entities/npc/Borg the Black.md');
+    const bl = getBacklinks(1, 'Borg the Black');
+    expect(bl.map(r => r.source_path)).toContain('Visitor.md');
+  });
+
+  it('does not treat a bare single symbol as a link', async () => {
+    const { getDb } = await import('../db/index.js');
+    await writeNote(1, 'Bare.md', 'C++ is a language and && is a symbol');
+    await indexNote(1, 'Bare.md');
+    const links = getDb().prepare('SELECT target_title FROM links WHERE user_id=1').all();
+    expect(links).toEqual([]);
+  });
+
+  it('does not extract entity spans from the frontmatter block', async () => {
+    const { getDb } = await import('../db/index.js');
+    const content = '---\nentity: &\n---\n\nBody with &&Real&& in it.';
+    await writeNote(1, 'FMEnt.md', content);
+    await indexNote(1, 'FMEnt.md');
+    const targets = getDb().prepare('SELECT target_title FROM links WHERE user_id=1').all().map(r => r.target_title);
+    expect(targets).toEqual(['Real']);
+  });
+
   it('extracts inline tags', async () => {
     const { getDb } = await import('../db/index.js');
     await writeNote(1, 'Tagged.md', 'Hello #mytag and #another/sub');
