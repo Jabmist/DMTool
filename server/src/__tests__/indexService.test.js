@@ -55,6 +55,41 @@ describe('indexNote', () => {
     expect(tags).toContain('beta');
   });
 
+  it('reads the entity frontmatter symbol into notes.entity_symbol', async () => {
+    const { getDb } = await import('../db/index.js');
+    const content = '---\nentity: &\n---\n\n## Description\nAn NPC.';
+    await writeNote(1, 'entities/npc/Borg the Black.md', content);
+    await indexNote(1, 'entities/npc/Borg the Black.md');
+    const row = getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id=1 AND path=?').get('entities/npc/Borg the Black.md');
+    expect(row.entity_symbol).toBe('&');
+  });
+
+  it('leaves notes.entity_symbol NULL when the entity key is absent', async () => {
+    const { getDb } = await import('../db/index.js');
+    await writeNote(1, 'ordinary.md', 'Just a note.');
+    await indexNote(1, 'ordinary.md');
+    const row = getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id=1 AND path=?').get('ordinary.md');
+    expect(row.entity_symbol).toBeNull();
+  });
+
+  it('leaves notes.entity_symbol NULL when the entity value is not one of the six symbols', async () => {
+    const { getDb } = await import('../db/index.js');
+    await writeNote(1, 'badentity.md', '---\nentity: #\n---\n\nBad value.');
+    await indexNote(1, 'badentity.md');
+    const row = getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id=1 AND path=?').get('badentity.md');
+    expect(row.entity_symbol).toBeNull();
+  });
+
+  it('re-classifying a note updates entity_symbol', async () => {
+    const { getDb } = await import('../db/index.js');
+    await writeNote(1, 'Reclassified.md', 'First, no entity.');
+    await indexNote(1, 'Reclassified.md');
+    expect(getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id=1 AND path=?').get('Reclassified.md').entity_symbol).toBeNull();
+    await writeNote(1, 'Reclassified.md', '---\nentity: !\n---\n\nNow an event.');
+    await indexNote(1, 'Reclassified.md');
+    expect(getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id=1 AND path=?').get('Reclassified.md').entity_symbol).toBe('!');
+  });
+
   it('re-indexing updates stale data', async () => {
     const { getDb } = await import('../db/index.js');
     await writeNote(1, 'Evolving.md', 'First [[LinkA]]');

@@ -64,10 +64,11 @@ describe('GET /api/notebooks', () => {
     expect((await request(app).get('/api/notebooks')).status).toBe(401);
   });
 
-  it('returns empty list initially', async () => {
+  it('returns the six seed entity notebooks (seeded at registration)', async () => {
     const res = await auth(request(app).get('/api/notebooks'));
     expect(res.status).toBe(200);
-    expect(res.body.notebooks).toEqual([]);
+    const names = res.body.notebooks.map(n => n.name).sort();
+    expect(names).toEqual(['Events', 'Items', 'Locations', 'NPCs', 'Players', 'Traps'].sort());
   });
 });
 
@@ -116,6 +117,16 @@ describe('PATCH /api/notebooks/:id', () => {
   it('returns 404 for another user\'s notebook', async () => {
     const res = await auth(request(app).patch(`/api/notebooks/${nbId}`).send({ name: 'Stolen' }), authHeader2);
     expect(res.status).toBe(404);
+  });
+
+  it('returns 409 when trying to rename a seed entity notebook (Q3 lock)', async () => {
+    const eventsId = getDb().prepare("SELECT id FROM notebooks WHERE user_id = (SELECT id FROM users WHERE email = 'nb1@test.com') AND name = 'Events'").get().id;
+    const res = await auth(request(app).patch(`/api/notebooks/${eventsId}`).send({ name: 'Renamed Entities' }));
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/cannot be renamed/i);
+    // Original name preserved.
+    const still = getDb().prepare('SELECT name FROM notebooks WHERE id = ?').get(eventsId);
+    expect(still.name).toBe('Events');
   });
 });
 
@@ -182,6 +193,43 @@ describe('DELETE /api/notebooks/:id', () => {
     const r = await auth(request(app).post('/api/notebooks').send({ name: 'Mine' }));
     const res = await auth(request(app).delete(`/api/notebooks/${r.body.id}`), authHeader2);
     expect(res.status).toBe(404);
+  });
+
+  it('deleting a seed notebook removes it + its notes but keeps the type template intact (Q3)', async () => {
+    const db = getDb();
+    const u1 = db.prepare("SELECT id FROM users WHERE email = 'nb1@test.com'").get().id;
+
+    // Create a Trap entity (files into the 'Traps' seed notebook), then note the
+    // trap template row (should survive the delete).
+    await auth(request(app).post('/api/entity-types/^').send({ name: 'Dart Trap' }));
+    const notePath = 'entities/trap/Dart Trap.md';
+    const trapsId = db.prepare(
+      'SELECT id FROM notebooks WHERE user_id = ? AND name = ?'
+    ).get(u1, 'Traps').id;
+    const tplRow = db.prepare(
+      'SELECT id, content FROM templates WHERE user_id = ? AND entity_symbol = ?'
+    ).get(u1, '^');
+    const tplContentBefore = tplRow.content;
+
+    // Confirm the note is in the notebook and exists in the vault + DB.
+    expect(db.prepare('SELECT 1 FROM notebook_notes WHERE notebook_id = ? AND note_path = ?').get(trapsId, notePath)).toBeDefined();
+    expect(db.prepare('SELECT 1 FROM notes WHERE user_id = ? AND path = ?').get(u1, notePath)).toBeDefined();
+
+    // Delete the seed notebook WITH its notes.
+    const del = await auth(request(app).delete(`/api/notebooks/${trapsId}?deleteNotes=true`));
+    expect(del.status).toBe(200);
+
+    // (a) the notebook row is gone
+    expect(db.prepare('SELECT 1 FROM notebooks WHERE id = ?').get(trapsId)).toBeUndefined();
+    // (b) the note is gone from the DB (and its links)
+    expect(db.prepare('SELECT 1 FROM notes WHERE user_id = ? AND path = ?').get(u1, notePath)).toBeUndefined();
+    expect(db.prepare('SELECT 1 FROM notebook_notes WHERE notebook_id = ? AND note_path = ?').get(trapsId, notePath)).toBeUndefined();
+    // (c) the trap template row is still present with its content intact
+    const tplAfter = db.prepare(
+      'SELECT content FROM templates WHERE user_id = ? AND entity_symbol = ?'
+    ).get(u1, '^');
+    expect(tplAfter).toBeDefined();
+    expect(tplAfter.content).toBe(tplContentBefore);
   });
 });
 

@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { getDb } from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import { recordSignon } from '../services/telemetry.js';
+import { ensureSeedData } from '../services/entitySeeding.js';
 
 const router = Router();
 const SALT_ROUNDS = 12;
@@ -63,6 +64,11 @@ router.post('/register', async (req, res) => {
 
   const hashed = await bcrypt.hash(password, SALT_ROUNDS);
   const result = db.prepare('INSERT INTO users (email, password, role, status) VALUES (?, ?, ?, ?)').run(email, hashed, role, status);
+
+  // DMTool Phase 1: seed the six notebook + six entity-template rows for the
+  // new user (idempotent — see entitySeeding.js). Runs BEFORE any branch so
+  // both the first (admin/active) user and pending users get the seed.
+  ensureSeedData(result.lastInsertRowid);
 
   if (!isFirst) {
     return res.status(201).json({

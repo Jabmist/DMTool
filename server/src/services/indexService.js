@@ -1,10 +1,15 @@
 import { getDb } from '../db/index.js';
 import { readNote, listNotes } from './fileService.js';
+import { ENTITY_SYMBOLS } from '../entityTypes.js';
 import path from 'path';
 
 const WIKILINK_RE = /\[\[([^\]|#]+)(?:\|([^\]]+))?\]\]/g;
 const TAG_RE = /(?:^|\s)#([\w/-]+)/g;
 const FRONTMATTER_TAG_RE = /^tags:\s*\[([^\]]+)\]/m;
+// DMTool entity frontmatter (Q8): `entity: &` — the value is one of the six
+// one-char symbols. Loose line-anchored parse, same shape as the tags frontmatter
+// regex (no YAML dependency).
+const FRONTMATTER_ENTITY_RE = /^entity:\s*([!@&$^+])\s*$/m;
 
 function extractTitle(notePath) {
   return path.basename(notePath, '.md');
@@ -26,6 +31,15 @@ function extractTags(content) {
   return [...tags];
 }
 
+// Read the `entity:` frontmatter key (Q8). Returns the one-char symbol if the
+// value is one of the six, otherwise null (note falls back to an ordinary
+// note). Absent or invalid values both yield null — graceful downgrade.
+function extractEntitySymbol(content) {
+  const m = FRONTMATTER_ENTITY_RE.exec(content);
+  if (m && ENTITY_SYMBOLS.has(m[1])) return m[1];
+  return null;
+}
+
 export async function indexNote(userId, notePath, editorId) {
   const db = getDb();
   const content = await readNote(userId, notePath);
@@ -33,6 +47,7 @@ export async function indexNote(userId, notePath, editorId) {
   // Who actually wrote this version (a member editing a shared notebook differs
   // from the owner). Defaulted to the owner for private writes / re-indexing.
   const lastEditedBy = editorId ?? userId;
+  const entitySymbol = extractEntitySymbol(content);
 
   // `INSERT OR REPLACE` below will give the note a NEW id (SQLite deletes +
   // re-inserts). FTS rows are keyed by that id (rowid = notes.id), so we must
@@ -42,8 +57,8 @@ export async function indexNote(userId, notePath, editorId) {
     db.prepare('DELETE FROM notes_fts WHERE rowid = ?').run(oldRowid);
   }
 
-  db.prepare('INSERT OR REPLACE INTO notes (user_id, path, title, updated_at, last_edited_by) VALUES (?, ?, ?, unixepoch(), ?)')
-    .run(userId, notePath, title, lastEditedBy);
+  db.prepare('INSERT OR REPLACE INTO notes (user_id, path, title, updated_at, last_edited_by, entity_symbol) VALUES (?, ?, ?, unixepoch(), ?, ?)')
+    .run(userId, notePath, title, lastEditedBy, entitySymbol);
 
   db.prepare('DELETE FROM links WHERE user_id = ? AND source_path = ?').run(userId, notePath);
   const insertLink = db.prepare('INSERT INTO links (user_id, source_path, target_title, label) VALUES (?, ?, ?, ?)');

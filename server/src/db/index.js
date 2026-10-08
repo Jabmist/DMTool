@@ -243,6 +243,19 @@ function runMigrations() {
     );
     CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(replaced_at, start_time, end_time);
   `);
+
+  // ── DMTool entity types (Phase 1) ──────────────────────────────────────────
+  // `notes.entity_symbol` + `templates.entity_symbol` both hold the one-char
+  // symbol (e.g. '&' for NPC), never the name or a compound like '&npc' (Q8).
+  // Both are nullable; a note with NULL is an ordinary note.
+  try { db.exec('ALTER TABLE notes ADD COLUMN entity_symbol TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE templates ADD COLUMN entity_symbol TEXT'); } catch { /* already exists */ }
+  // One seeded template per (user, symbol). SQLite treats NULLs as distinct in
+  // a unique index, so pre-existing templates (entity_symbol NULL) never
+  // collide, while a second row for the same user+symbol is rejected — making
+  // the registration-time seed (ensureSeedData) schema-enforced, not just a
+  // SELECT-then-INSERT (Q9).
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_user_entity ON templates(user_id, entity_symbol)');
 }
 
 function migrateInvitedBy() {

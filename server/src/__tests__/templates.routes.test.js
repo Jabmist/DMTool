@@ -15,10 +15,19 @@ afterAll(() => cleanupTmpVault(tmpVault));
 function auth() { return { Authorization: `Bearer ${token}` }; }
 
 describe('GET /api/templates', () => {
-  it('returns empty list initially', async () => {
+  it('returns the six entity templates seeded at registration', async () => {
     const res = await request(app).get('/api/templates').set(auth());
     expect(res.status).toBe(200);
-    expect(res.body.templates).toEqual([]);
+    const names = res.body.templates.map(t => t.name).sort();
+    // Q2/Q3: six seed templates are created per-user at registration.
+    expect(names).toEqual([
+      'Event Template',
+      'Item Template',
+      'Location Template',
+      'NPC Template',
+      'Player Template',
+      'Trap Template',
+    ]);
   });
 
   it('requires auth', async () => {

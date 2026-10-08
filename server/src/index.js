@@ -13,6 +13,7 @@ import dissectRoutes from './routes/dissect.js';
 import notebooksRoutes from './routes/notebooks.js';
 import adminRoutes from './routes/admin.js';
 import templatesRoutes from './routes/templates.js';
+import entityTypesRoutes from './routes/entityTypes.js';
 import { cleanupOrphanFts } from './services/indexService.js';
 import { reapStalledJobs } from './services/jobService.js';
 
@@ -70,6 +71,7 @@ app.use('/api/dissect', dissectRoutes);
 app.use('/api/notebooks', notebooksRoutes);
 app.use('/api/admin',     adminRoutes);
 app.use('/api/templates', templatesRoutes);
+app.use('/api/entity-types', entityTypesRoutes);
 
 app.use((err, req, res, _next) => {
   const status = err.status ?? 500;

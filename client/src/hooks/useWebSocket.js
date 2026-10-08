@@ -18,7 +18,7 @@ export function useWebSocket(onMessage) {
     if (!token) return;
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const base = import.meta.env.BASE_URL.replace(/\/$/, ''); // '/notes'
+    const base = import.meta.env.BASE_URL.replace(/\/$/, ''); // e.g. '/dmtool'
     const ws = new WebSocket(`${proto}://${location.host}/${base}/ws`);
     wsRef.current = ws;
 

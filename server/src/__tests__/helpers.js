@@ -38,6 +38,7 @@ export async function createTestApp() {
   const { default: notebooksRoutes } = await import('../routes/notebooks.js');
   const { default: adminRoutes }     = await import('../routes/admin.js');
   const { default: templatesRoutes } = await import('../routes/templates.js');
+  const { default: entityTypesRoutes } = await import('../routes/entityTypes.js');
   const { default: dissectRoutes }   = await import('../routes/dissect.js');
   const { default: importRoutes }    = await import('../routes/import.js');
 
@@ -49,6 +50,7 @@ export async function createTestApp() {
   app.use('/api/notebooks', notebooksRoutes);
   app.use('/api/admin',     adminRoutes);
   app.use('/api/templates', templatesRoutes);
+  app.use('/api/entity-types', entityTypesRoutes);
   app.use('/api/dissect',   dissectRoutes);
   app.use('/api/import',    importRoutes);
 

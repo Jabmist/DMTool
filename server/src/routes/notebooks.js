@@ -5,6 +5,7 @@ import { deleteNote, readNote, writeNote } from '../services/fileService.js';
 import { indexNote, deleteFtsNote } from '../services/indexService.js';
 import { getNotebookAccess } from '../db/notebookAccess.js';
 import { broadcastToNotebook } from '../ws/index.js';
+import { SEED_NOTEBOOK_NAMES } from '../entityTypes.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -144,7 +145,15 @@ router.patch('/:id', (req, res) => {
   const { name } = req.body ?? {};
   if (!name?.trim()) return res.status(400).json({ error: 'name required' });
   try {
-    const result = getDb()
+    const db = getDb();
+    const existing = db.prepare('SELECT name FROM notebooks WHERE id = ? AND user_id = ?')
+      .get(id, req.user.sub);
+    if (!existing) return res.status(404).json({ error: 'Notebook not found' });
+    // Q3 / 1.8b: the six seed entity notebooks are rename-protected.
+    if (SEED_NOTEBOOK_NAMES.has(existing.name)) {
+      return res.status(409).json({ error: 'This is a required entity notebook and cannot be renamed.' });
+    }
+    const result = db
       .prepare('UPDATE notebooks SET name = ? WHERE id = ? AND user_id = ?')
       .run(name.trim(), id, req.user.sub);
     if (result.changes === 0) return res.status(404).json({ error: 'Notebook not found' });
