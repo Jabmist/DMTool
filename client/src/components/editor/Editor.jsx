@@ -5,15 +5,26 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { autocompletion } from '@codemirror/autocomplete';
 import { api } from '../../api/client.js';
 import BacklinksPanel from './BacklinksPanel.jsx';
-import { wikilinkCompletion } from './wikilinkComplete.js';
-import { entityCompletion } from './symbolLinkComplete.js';
+import { wikilinkSource } from './wikilinkComplete.js';
+import { entitySource } from './symbolLinkComplete.js';
 import { setNewEntityHandler, clearNewEntityHandler } from './entityLinkBridge.js';
 import NotePreview from './NotePreview.jsx';
 import EditorToolbar from './EditorToolbar.jsx';
 
 const SAVE_DEBOUNCE_MS = 1000;
+
+// One autocompletion config owning both link sources. CodeMirror cannot merge
+// two autocompletion() extensions (each sets the `override` config field →
+// "Config merge conflict for field override"), so the [[wikilink]] and
+// [entity-symbol] pickers share a single instance.
+const entityLinkCompletion = autocompletion({
+  override: [wikilinkSource, entitySource],
+  closeOnBlur: true,
+  activateOnTyping: true,
+});
 
 export default function Editor({ notePath, notebookId, onNavigate, onDelete, onRename, mode = 'edit', onModeChange, notebooks, onNotebookChange, onEntityCreated }) {
   const editorRef = useRef(null);
@@ -198,8 +209,7 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
         oneDark,
         highlightActiveLine(),
         EditorView.lineWrapping,
-        wikilinkCompletion,
-        entityCompletion,
+        entityLinkCompletion,
         updateListener,
       ],
     });

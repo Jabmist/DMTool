@@ -59,7 +59,7 @@ Useful root scripts: `npm run dev`, `npm run build`, `npm run start`, `npm run t
   PORT=3042 DMTL_API_ORIGIN=http://localhost:3042 npm run dev
   ```
   Vite auto-bumps to 5174 when 5173 is taken. `DMTL_API_ORIGIN` (default `http://localhost:3000`)
-  is read in `client/vite.config.js` and overrides both `/notes/api` and `/notes/ws` proxy
+  is read in `client/vite.config.js` and overrides both `/dmtool/api` and `/dmtool/ws` proxy
   targets. **Production is unaffected** (nginx + server use `.env`, not this var).
 
 ### Dev loop (`.32`, this box)
@@ -87,19 +87,18 @@ edit + git push  →  git pull + npm ci + npm run build  →  rsync + nginx -t
 - `.202`: new system user (suggest `dmtl`) + `/opt/dmtl/{app,data}`; clone; `npm ci && npm run
   build`; `systemctl` service `dmtl-web` on **port 3001** (obsidian-web keeps 3000); Ollama
   reused; fresh `.env` with new JWT secrets.
-- `.201`: nginx `location /dnd/` — static root `dmtl/client/dist`; proxy `/dnd/api` + `/dnd/ws`
-  (with `Upgrade` headers) → `127.0.0.1:3001`; 301 `/dnd` → `/dnd/`; existing TLS cert.
+- `.201`: nginx `location /dmtool/` — static root `dmtl/client/dist`; proxy `/dmtool/api` + `/dmtool/ws`
+  (with `Upgrade` headers) → `127.0.0.1:3001`; 301 `/dmtool` → `/dmtool/`; existing TLS cert.
 - Client build for the subpath — the **4 invariants** (from baseline `handoff2.md`), all of
-  which must resolve to `/dnd/`: `vite.config.js` `base` + dev proxy keys; `api/client.js`
+  which must resolve to `/dmtool/`: `vite.config.js` `base` + dev proxy keys; `api/client.js`
   `BASE_URL`-relative `resolve()`; `useWebSocket.js` WS URL; `main.jsx` `BrowserRouter basename`.
-  In practice only **`vite.config.js` is the hard-coded set** (today `/notes/`, the fork's
-  transitional subpath) — the other three derive from `BASE_URL` and follow automatically.
-  Change `base` + the proxy keys to `/dnd/`; leave the `BASE_URL`-relative code untouched.
-  (Detail + exact code in §5.)
+  In practice only **`vite.config.js` is the hard-coded set** (today `/dmtool/`) — the other
+  three derive from `BASE_URL` and follow automatically.
+  Leave the `BASE_URL`-relative code untouched. (Detail + exact code in §5.)
 
-**Sanity check before touching nginx (per baseline checklist, rewritten for `/dnd/`):**
+**Sanity check before touching nginx (per baseline checklist, rewritten for `/dmtool/`):**
 ```
-grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must be "dnd/assets/..." not "/assets/..."
+grep -o 'dmtool/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dmtool/index.html   # must be "dmtool/assets/..." not "/assets/..."
 ```
 
 ---
@@ -116,14 +115,14 @@ grep -o 'dnd/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dnd/index.html   # must b
   (`notes`, `links`, `tags`, FTS5), plus `notebooks`, `templates`, `jobs`, etc. `indexService.js`
   (`indexNote`) upserts the `notes` row, re-extracts `[[wikilinks]]` into `links` and `#tags`
   into `tags`, and rebuilds the FTS row. **This is the integration point for Phase 1/2.**
-- **Client build invariants** (must hold for any subpath — `/dnd/` once deployed). Today all
-  read the fork's transitional `base: '/notes/'`. Change **`vite.config.js`'s `base` in one
-  place**; `client.js` / `useWebSocket.js` / `main.jsx` derive from `BASE_URL` so they follow
+- **Client build invariants** (must hold for any subpath — `/dmtool/`). Today all
+  read the fork's `base: '/dmtool/'`. **`vite.config.js`'s `base` is the single hard-coded
+  set**; `client.js` / `useWebSocket.js` / `main.jsx` derive from `BASE_URL` so they follow
   automatically. **Do not hard-code the subpath in those three files.**
-  - `vite.config.js`: `base` **and** the dev proxy keys (today `/notes/api`, `/notes/ws`, with
-    rewrite stripping `/notes`) — both must be set to the target subpath (e.g. `/dnd/`).
+  - `vite.config.js`: `base` **and** the dev proxy keys (today `/dmtool/api`, `/dmtool/ws`, with
+    rewrite stripping `/dmtool`) — both are the target subpath (`/dmtool/`).
   - `src/api/client.js`: `BASE = BASE_URL` (trailing slash stripped); every fetch via `resolve(url)`.
-    `BASE_URL` ends in `/` — never concatenate an absolute path directly (e.g. `/dnd//api/...`
+    `BASE_URL` ends in `/` — never concatenate an absolute path directly (e.g. `/dmtool//api/...`
     would break `location ^~`).
   - `src/hooks/useWebSocket.js` (`useWebSocket.js:21-22`):
     `const base = import.meta.env.BASE_URL.replace(/\/$/, '');` then

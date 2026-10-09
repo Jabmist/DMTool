@@ -1,4 +1,3 @@
-import { autocompletion } from '@codemirror/autocomplete';
 import { api } from '../../api/client.js';
 import { parseTrigger, filterEntityNotes, entityNoteUrl } from './symbolPalette.js';
 import { hasNewEntityHandler, requestNewEntity } from './entityLinkBridge.js';
@@ -14,7 +13,7 @@ export const NEW_ENTITY_LABEL = 'New…';
 // `Name&sym` — the opening pair is kept, the closing pair appended.
 // New… → hand off to the Editor (bridge), which shows the name prompt, creates the
 // entity via POST /api/entity-types/:symbol, and inserts the link from `from`.
-async function entitySource(context) {
+export async function entitySource(context) {
   const before = context.matchBefore(/[^]*$/);
   const trigger = parseTrigger(before?.text ?? '');
   if (!trigger) return null;
@@ -44,9 +43,3 @@ async function entitySource(context) {
   if (!options.length) return null;
   return { from: before.from + trigger.pairIndex, options, validFor: /^[^\n]*$/ };
 }
-
-export const entityCompletion = autocompletion({
-  override: [entitySource],
-  closeOnBlur: true,
-  activateOnTyping: true,
-});

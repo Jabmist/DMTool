@@ -1,4 +1,3 @@
-import { autocompletion } from '@codemirror/autocomplete';
 import { api } from '../../api/client.js';
 
 // Cache note titles for 10s to avoid hammering the API on every keystroke
@@ -19,7 +18,7 @@ export function invalidateWikilinkCache() {
   cacheExpiry = 0;
 }
 
-async function wikilinkSource(context) {
+export async function wikilinkSource(context) {
   // Only trigger inside [[ ... ]] — match from [[ up to cursor with no closing ]]
   const before = context.matchBefore(/\[\[[^\]]*$/);
   if (!before && !context.explicit) return null;
@@ -44,8 +43,3 @@ async function wikilinkSource(context) {
     validFor: /^[^\]]*$/,
   };
 }
-
-export const wikilinkCompletion = autocompletion({
-  override: [wikilinkSource],
-  closeOnBlur: true,
-});

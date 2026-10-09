@@ -736,9 +736,12 @@ Consequences for subtasks (fold in):
 - [x] Tests: `symbolPalette.test.js` (trigger/filter/url), entity-link cases added to
       `notePreview.test.jsx` (pure + rendered click), `indexService.test.js` (all six links, null
       label, backlinks, C++ guard, frontmatter exclusion). `npm run test` green: server 351, client 83.
-- [ ] Browser test (dev server, manual — Steve): type `&&` → list appears → pick new "Borg the
-      Black" → link `&&Borg the Black&&` inline; preview renders a clickable link; the NPC note's
-      backlinks pane shows the source note. Repeat sanity for all six symbols.
+- [x] Browser test (dev server, manual — Steve, 2026-10-09): type `&&` → list appears → pick new
+      "Borg the Black" → link `&&Borg the Black&&` inline; preview renders a clickable link; the
+      NPC note's backlinks pane shows the source note. Repeat sanity for all six symbols. ✅ Passing.
+      (Two Phase-2 follow-up bugs found & fixed during this pass: WS double-slash `//dmtool/ws`,
+      and a CodeMirror `override` merge conflict from two `autocompletion()` extensions → merged to
+      one. See commit after this phase.)
 
 ## 5. Phase 3 — AI assist [ ]
 
@@ -766,20 +769,20 @@ Consequences for subtasks (fold in):
       Ollama reused (`OLLAMA_BASE_URL` same as obsidian's .env); fresh `.env` with new JWT secrets.
 - [ ] Read-only deploy key for DMTool repo (handoff2.md pattern): new keypair on `.202`,
       GitHub deploy key for `Jabmist/DMTool`, SSH config pin (separate from BedRock's).
-- [ ] Choose public path: **TBD — suggest `https://www.littlehillservices.com/dnd/`**
+- [ ] Choose public path: **TBD — suggest `https://www.littlehillservices.com/dmtool/`**
       (must be a fresh path; do NOT reuse `/notes/`).
-- [ ] `.201`: nginx `location /dnd/` — static root `dmtl/client/dist`,
-      proxy `/dnd/api` + `/dnd/ws` (`Upgrade` headers) → `127.0.0.1:3001`;
-      301 `/dnd` → `/dnd/`; TLS via existing cert.
-- [ ] Client build for the `/dnd/` base — same 4 invariants as notes (handoff2.md):
-      `vite.config.js` `base: '/dnd/'` (+ dev proxy keys `/dnd/api`,`/dnd/ws` with rewrite),
+- [ ] `.201`: nginx `location /dmtool/` — static root `dmtl/client/dist`,
+      proxy `/dmtool/api` + `/dmtool/ws` (`Upgrade` headers) → `127.0.0.1:3001`;
+      301 `/dmtool` → `/dmtool/`; TLS via existing cert.
+- [ ] Client build for the `/dmtool/` base — same 4 invariants as notes (handoff2.md):
+      `vite.config.js` `base: '/dmtool/'` (+ dev proxy keys `/dmtool/api`,`/dmtool/ws` with rewrite),
       `src/api/client.js` already uses `BASE_URL` relative (verify), `useWebSocket.js`
-      URL → `${proto}://${host}/dnd/ws`, `main.jsx` `basename="/dnd"`.
-      Dev on `.32` needs `npm run dev` base handling (BASE_URL in dev = `/dnd/` — confirm the
+      URL → `${proto}://${host}/dmtool/ws`, `main.jsx` `basename="/dmtool"`.
+      Dev on `.32` needs `npm run dev` base handling (BASE_URL in dev = `/dmtool/` — confirm the
       vite proxy + dev server serve under that mount; mirror whatever obsidian-web does for `/notes/`).
-- [ ] Verification checklist: copy handoff2.md's 7-step checklist, rewrite for `/dnd/` +
-      :3001 (301, 200 index, asset path check `dnd/assets/index-*.js`, 400 JSON from
-      `/dnd/api/auth/login`, 101 WS upgrade).
+- [ ] Verification checklist: copy handoff2.md's 7-step checklist, rewrite for `/dmtool/` +
+      :3001 (301, 200 index, asset path check `dmtool/assets/index-*.js`, 400 JSON from
+      `/dmtool/api/auth/login`, 101 WS upgrade).
 
 ---
 
@@ -797,7 +800,7 @@ Consequences for subtasks (fold in):
 
 ## 8. Open questions (ask Steve when they bite)
 
-- Public path for deploy (`/dnd/` suggested) — Phase 4.
+- Public path for deploy (`/dmtool/` suggested) — Phase 4.
 - `.202` service user name for DMTool (`dmtl` suggested) — Phase 4.
 - Templates content: **Q2 (2026-10-05) RESOLVED** — the six starter templates (with Steve's
   Event/Location/NPC adjustments) are the locked seed content in §3b. Still per-user editable at
