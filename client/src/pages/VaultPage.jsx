@@ -28,6 +28,8 @@ export default function VaultPage() {
   const [notebooks, setNotebooks] = useState([]);
   const [notebooksKey, setNotebooksKey] = useState(0);
   const [dissectJob, setDissectJob] = useState(null);
+  const [draftJob, setDraftJob] = useState(null);
+  const [noteRekey, setNoteRekey] = useState(0);
   const [notebookColorKey, setNotebookColorKey] = useState(0);
   // Issue #16: active admin announcement fetched on mount (covers login
   // navigation and app load). Shown once per session until acknowledged.
@@ -80,6 +82,24 @@ export default function VaultPage() {
     });
   }, [wsEvents, dissectJob?.jobId]);
 
+  // Update the entity AI-draft job from WebSocket events (same job:events shape,
+  // but the payload is a single `content` markdown instead of `notes`).
+  useEffect(() => {
+    if (!draftJob?.jobId) return;
+    const last = [...wsEvents].reverse().find(e => e.jobId === draftJob.jobId);
+    if (!last) return;
+    setDraftJob(j => {
+      if (!j) return j;
+      if (last.type === 'job:processing' && last.timeoutMs) return { ...j, status: 'processing', timeoutMs: last.timeoutMs };
+      if (last.type === 'job:preview'    && j.status !== 'preview') return { ...j, status: 'preview', content: last.content ?? j.content };
+      if (last.type === 'job:failed'     && j.status !== 'failed')  return { ...j, status: 'failed', error: last.error };
+      if (last.type === 'job:cancelled'  && j.status !== 'cancelled') return { ...j, status: 'cancelled', error: last.error ?? 'Cancelled' };
+      if (last.type === 'job:waiting_continue' && j.status !== 'waiting_continue') return { ...j, status: 'waiting_continue' };
+      if (last.type === 'job:complete'   && j.status !== 'complete') return { ...j, status: 'complete' };
+      return j;
+    });
+  }, [wsEvents, draftJob?.jobId]);
+
   // Polling fallback — kicks in when WS isn't delivering events (e.g. after server restart)
   useEffect(() => {
     if (!['processing', 'waiting_continue'].includes(dissectJob?.status)) return;
@@ -98,6 +118,25 @@ export default function VaultPage() {
     }, 3_000);
     return () => clearInterval(id);
   }, [dissectJob?.jobId, dissectJob?.status]);
+
+  // Polling fallback for the entity AI-draft job (mirrors the dissect poll).
+  useEffect(() => {
+    if (!['processing', 'waiting_continue'].includes(draftJob?.status)) return;
+    const id = setInterval(async () => {
+      try {
+        const job = await api.get(`/api/entity-types/draft/${draftJob.jobId}`);
+        setDraftJob(j => {
+          if (!j) return j;
+          if (job.status === 'preview') return { ...j, status: 'preview', content: job.content ?? '' };
+          if (job.status === 'failed')  return { ...j, status: 'failed', error: job.error ?? 'Unknown error' };
+          if (job.status === 'cancelled') return { ...j, status: 'cancelled', error: job.error ?? 'Cancelled' };
+          if (job.status === 'waiting_continue') return { ...j, status: 'waiting_continue' };
+          return j;
+        });
+      } catch { /* ignore transient poll errors */ }
+    }, 3_000);
+    return () => clearInterval(id);
+  }, [draftJob?.jobId, draftJob?.status]);
 
   // Refresh sidebar when dissect notes land in the vault
   useEffect(() => {
@@ -171,7 +210,7 @@ export default function VaultPage() {
           onClose={() => setSidebarOpen(false)}
         />
         <main className="main-content" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {view === 'editor'    && <Editor notePath={activePath} notebookId={activeNotebookId} onNavigate={path => handleSelectNote(path, null)} onDelete={handleNoteDeleted} onRename={handleNoteRenamed} mode={editorMode} onModeChange={setEditorMode} notebooks={notebooks} onNotebookChange={() => { setSidebarRefreshKey(k => k + 1); setNotebookColorKey(k => k + 1); }} onEntityCreated={() => { setSidebarRefreshKey(k => k + 1); setNotebooksKey(k => k + 1); }} />}
+          {view === 'editor'    && <Editor notePath={activePath} notebookId={activeNotebookId} onNavigate={path => handleSelectNote(path, null)} onDelete={handleNoteDeleted} onRename={handleNoteRenamed} mode={editorMode} onModeChange={setEditorMode} notebooks={notebooks} onNotebookChange={() => { setSidebarRefreshKey(k => k + 1); setNotebookColorKey(k => k + 1); }} onEntityCreated={() => { setSidebarRefreshKey(k => k + 1); setNotebooksKey(k => k + 1); }} draftJob={draftJob} onDraftJobChange={setDraftJob} onAiComplete={() => setNoteRekey(k => k + 1)} loadKey={noteRekey} />}
           {view === 'graph'     && <GraphView activePath={activePath} notebookColorKey={notebookColorKey} onSelectNote={(p, nbId) => { handleSelectNote(p, nbId ?? null); setEditorMode('preview'); setView('editor'); }} isMobile={isMobile} />}
           {view === 'dissect'   && <DissectPanel dissectJob={dissectJob} onDissectJobChange={setDissectJob} onComplete={() => setView('editor')} />}
           {view === 'import'    && <ImportPanel onComplete={() => setView('editor')} />}

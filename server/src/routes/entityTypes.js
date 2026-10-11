@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { getDb } from '../db/index.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
@@ -10,11 +11,35 @@ import {
   defaultTemplate,
 } from '../entityTypes.js';
 import { indexNote } from '../services/indexService.js';
-import { writeNote } from '../services/fileService.js';
+import { writeNote, readNote } from '../services/fileService.js';
 import { ensureSeedData } from '../services/entitySeeding.js';
+import {
+  createJob,
+  getJob,
+  runDraftEntityJob,
+  continueDraftEntityJob,
+  cancelDraftEntityJob,
+} from '../services/jobService.js';
+import { warmModel } from '../services/aiService.js';
 
 const router = Router();
 router.use(requireAuth);
+
+const isDev = process.env.NODE_ENV !== 'production';
+export const draftLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: isDev ? 1000 : 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => String(req.user.sub),
+});
+export const applyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: isDev ? 1000 : 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: req => String(req.user.sub),
+});
 
 // ── GET / — registry metadata (Q10) ───────────────────────────────────────────
 // Returns the six registry entries + each user's template_id / template_name for
@@ -158,6 +183,126 @@ router.post('/:symbol', async (req, res) => {
   }
 
   res.status(201).json({ path: notePath, name: safeName, symbol });
+});
+
+// ── Phase 3: AI assist ───────────────────────────────────────────────────────
+// Draft an entity's details (job + WS, mirrors dissect), then apply the draft
+// to the note. The draft targets the entity note the user is looking at: we
+// derive its path from the type + name (byte-exact per Q4/Q5) and carry it on
+// the job row so /apply knows where to write without a shared-notebook context.
+
+function parseJobInput(job) {
+  try {
+    const raw = JSON.parse(job.input);
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch { return {}; }
+}
+
+// Preload the model on demand (mirrors dissect /warm) so the first draft doesn't
+// pay Ollama's model-load latency. Registered before any /:symbol/draft so the
+// literal 'draft' segment is not swallowed as a symbol.
+router.post('/warm', async (req, res) => {
+  const result = await warmModel();
+  res.status(200).json(result);
+});
+
+// POST /api/entity-types/:symbol/draft — start an AI draft for an entity
+router.post('/:symbol/draft', draftLimiter, async (req, res) => {
+  const symbol = req.params.symbol;
+  const type = bySymbol(symbol);
+  if (!type) return res.status(404).json({ error: 'Unknown entity type' });
+  const { name: rawName, extra } = req.body ?? {};
+  if (!rawName || typeof rawName !== 'string') {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  const safeName = safeEntityName(rawName.trim());
+  if (!safeName) return res.status(400).json({ error: 'name contains forbidden characters' });
+
+  const input = { symbol, name: safeName, path: entityPath(type, safeName) };
+  const jobId = createJob(req.user.sub, 'entity_draft', input);
+  runDraftEntityJob(jobId, req.user.sub, { symbol, name: safeName, extra: extra ?? '' }).catch(() => {});
+  res.status(202).json({ jobId });
+});
+
+// GET /api/entity-types/draft/:jobId — poll draft status (fallback for no WS)
+router.get('/draft/:jobId', (req, res) => {
+  const job = getJob(req.params.jobId, req.user.sub);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.type !== 'entity_draft') return res.status(404).json({ error: 'Not a draft job' });
+  const result = job.result ? JSON.parse(job.result) : null;
+  res.json({ ...job, content: result?.content ?? null });
+});
+
+// POST /api/entity-types/draft/:jobId/cancel
+router.post('/draft/:jobId/cancel', (req, res) => {
+  const job = getJob(req.params.jobId, req.user.sub);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (!['processing', 'waiting_continue'].includes(job.status)) {
+    return res.status(409).json({ error: `Job is not running (status: ${job.status})` });
+  }
+  cancelDraftEntityJob(job.id);
+  res.status(202).json({ cancelling: true });
+});
+
+// POST /api/entity-types/draft/:jobId/continue — resume after a timeout
+router.post('/draft/:jobId/continue', (req, res) => {
+  const job = getJob(req.params.jobId, req.user.sub);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status !== 'waiting_continue') {
+    return res.status(409).json({ error: `Job is not waiting (status: ${job.status})` });
+  }
+  if (!continueDraftEntityJob(job.id)) {
+    return res.status(409).json({ error: 'Job is no longer active' });
+  }
+  res.status(202).json({ continuing: true });
+});
+
+// POST /api/entity-types/draft/:jobId/apply — write the (edited) draft to the
+// entity note. Preserves the note's `entity:` frontmatter and re-indexes it.
+router.post('/draft/:jobId/apply', applyLimiter, async (req, res) => {
+  const job = getJob(req.params.jobId, req.user.sub);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.type !== 'entity_draft') {
+    return res.status(409).json({ error: 'Not a draft job' });
+  }
+  if (job.status !== 'preview') return res.status(409).json({ error: 'Job is not in preview state' });
+  const { content } = req.body ?? {};
+  if (typeof content !== 'string' || !content.trim()) {
+    return res.status(400).json({ error: 'content is required' });
+  }
+
+  const uid = req.user.sub;
+  const input = parseJobInput(job);
+  const symbol = input.symbol;
+  const type = bySymbol(symbol);
+  if (!type) return res.status(409).json({ error: 'Draft job has no valid entity type' });
+  const notePath = input.path;
+  if (!notePath) return res.status(409).json({ error: 'Draft job has no target path' });
+
+  // Preserve the entity frontmatter (or the type's symbol) at the top of the
+  // written file so the note stays classified, regardless of what the model
+  // or the editor produced.
+  let frontmatter = `---\nentity: ${symbol}\n---\n\n`;
+  try {
+    const existing = await readNote(uid, notePath);
+    const m = /^---\n(?:[^\n]*\n)*?entity:[^\n]*\n---/.exec(existing);
+    if (m) frontmatter = `${m[0]}\n\n`;
+    else if (/^---\n[\s\S]*?\n---/.test(existing)) {
+      const fm = existing.match(/^---\n[\s\S]*?\n---/);
+      if (fm) frontmatter = `${fm[0]}\n\n`;
+    }
+  } catch { /* new note → default frontmatter */ }
+
+  try {
+    await writeNote(uid, notePath, `${frontmatter}${content}`);
+    await indexNote(uid, notePath, uid);
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: 'Failed to apply draft' });
+  }
+
+  getDb().prepare("UPDATE jobs SET status = 'complete', updated_at = unixepoch() WHERE id = ?").run(job.id);
+  res.json({ path: notePath, written: true });
 });
 
 export default router;

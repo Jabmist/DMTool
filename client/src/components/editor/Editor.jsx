@@ -11,8 +11,10 @@ import BacklinksPanel from './BacklinksPanel.jsx';
 import { wikilinkSource } from './wikilinkComplete.js';
 import { entitySource } from './symbolLinkComplete.js';
 import { setNewEntityHandler, clearNewEntityHandler } from './entityLinkBridge.js';
+import { ENTITY_TYPES } from './symbolPalette.js';
 import NotePreview from './NotePreview.jsx';
 import EditorToolbar from './EditorToolbar.jsx';
+import EntityDraftPanel from './EntityDraftPanel.jsx';
 
 const SAVE_DEBOUNCE_MS = 1000;
 
@@ -26,7 +28,7 @@ const entityLinkCompletion = autocompletion({
   activateOnTyping: true,
 });
 
-export default function Editor({ notePath, notebookId, onNavigate, onDelete, onRename, mode = 'edit', onModeChange, notebooks, onNotebookChange, onEntityCreated }) {
+export default function Editor({ notePath, notebookId, onNavigate, onDelete, onRename, mode = 'edit', onModeChange, notebooks, onNotebookChange, onEntityCreated, draftJob, onDraftJobChange, onAiComplete, loadKey = 0 }) {
   const editorRef = useRef(null);
   const viewRef = useRef(null);
   const saveTimer = useRef(null);
@@ -40,6 +42,7 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
   const [backlinks, setBacklinks] = useState([]);
   const [status, setStatus] = useState('');
   const [previewContent, setPreviewContent] = useState('');
+  const [entitySymbol, setEntitySymbol] = useState(null);
   const [noteNotebooks, setNoteNotebooks] = useState([]);
   const [showNbPicker, setShowNbPicker] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -48,6 +51,8 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
   const [savingTpl, setSavingTpl] = useState(false);
   const [tplName, setTplName] = useState('');
   const tplInputRef = useRef(null);
+  // Phase 3: AI Assist panel shown when the user clicks the toolbar button.
+  const [aiOpen, setAiOpen] = useState(false);
   // Entity "New…" prompt (Phase 2): shown when the picker's New… row is chosen.
   const [entityPrompt, setEntityPrompt] = useState(null); // { type, name, error }
   const entityInputRef = useRef(null);
@@ -58,6 +63,12 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
   const isShared = notebookId != null;
   const isReadOnly = sharedRole === 'viewer';
   const canEdit = !isShared || sharedRole === 'owner' || sharedRole === 'editor';
+
+  // AI Assist (Phase 3): available only when the note is an entity.
+  const entity = entitySymbol ? ENTITY_TYPES.find(t => t.symbol === entitySymbol) : null;
+  const entityTypeLabel = entity?.label ?? null;
+  const aiLabel = entity ? { symbol: entity.symbol, label: entity.label } : null;
+  const entityDisplayName = notePath ? notePath.replace(/\.md$/, '').split('/').pop() : '';
 
   function noteApiBase() {
     return notebookIdRef.current != null
@@ -171,6 +182,11 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
   useEffect(() => { notePathRef.current = notePath; }, [notePath]);
   useEffect(() => { notebookIdRef.current = notebookId; }, [notebookId]);
 
+  // The AI-Assist panel and its job are relative to the currently-open note.
+  // Navigating to a different note closes any open panel (a draft keeps
+  // running for the note it was started on, surfaced via the toast).
+  useEffect(() => { setAiOpen(false); }, [notePath, notebookId]);
+
   const save = useCallback(async (content) => {
     const path = notePathRef.current;
     if (!path) return;
@@ -226,6 +242,7 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
   useEffect(() => {
     setNoteNotebooks([]);
     setShowNbPicker(false);
+    setEntitySymbol(null);
 
     if (!notePath) return;
 
@@ -233,6 +250,7 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
 
     api.get(`${base}/${notePath}`).then(d => {
       setPreviewContent(d.content);
+      setEntitySymbol(d.entity_symbol ?? null);
       loadedRef.current = d.content; // the doc about to be set is already saved
       const view = viewRef.current;
       if (view) {
@@ -256,7 +274,7 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
     api.get(`/api/notebooks/for-note?path=${encodeURIComponent(notePath)}`)
       .then(d => setNoteNotebooks(d.notebooks))
       .catch(() => setNoteNotebooks([]));
-  }, [notePath, notebookId]);
+  }, [notePath, notebookId, loadKey]);
 
   async function addToNotebook(nbId) {
     const nb = (notebooks ?? []).find(n => n.id === nbId);
@@ -447,7 +465,12 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
         </div>
       )}
 
-      {mode === 'edit' && notePath && canEdit && <EditorToolbar viewRef={viewRef} />}
+      {mode === 'edit' && notePath && canEdit && (
+        <EditorToolbar
+          viewRef={viewRef}
+          ai={aiLabel ? { label: aiLabel, name: entityDisplayName, onAssist: () => setAiOpen(true) } : null}
+        />
+      )}
 
       {isReadOnly && notePath && (
         <div style={{
@@ -460,24 +483,36 @@ export default function Editor({ notePath, notebookId, onNavigate, onDelete, onR
       )}
 
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-        {/* CodeMirror — hidden in preview mode or when read-only; kept mounted to preserve state */}
+        {/* CodeMirror — ALWAYS mounted so the editor view survives the AI panel
+            being open/closed (it's created once on mount); just hidden when the
+            panel, preview mode, or read-only are active. */}
         <div
           ref={editorRef}
           style={{
             flex: 1, height: '100%', overflow: 'auto',
-            display: mode === 'edit' && !isReadOnly ? 'block' : 'none',
+            display: mode === 'edit' && !isReadOnly && !aiOpen ? 'block' : 'none',
             pointerEvents: isReadOnly ? 'none' : 'auto',
           }}
         />
 
-        {(mode === 'preview' || isReadOnly) && (
+        {(mode === 'preview' || isReadOnly) && !aiOpen && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <NotePreview content={previewContent} onNavigate={onNavigate} />
           </div>
         )}
 
-        {backlinks.length > 0 && (
+        {backlinks.length > 0 && !aiOpen && (
           <BacklinksPanel backlinks={backlinks} onNavigate={onNavigate} />
+        )}
+
+        {aiOpen && (
+          <EntityDraftPanel
+            label={aiLabel}
+            name={entityDisplayName}
+            draftJob={draftJob}
+            onDraftJobChange={onDraftJobChange}
+            onComplete={() => { setAiOpen(false); onAiComplete?.(); }}
+          />
         )}
       </div>
     </div>

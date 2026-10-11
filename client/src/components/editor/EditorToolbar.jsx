@@ -246,7 +246,7 @@ const TOOLS = [
   { label: '—',   title: 'Horizontal rule', action: v => insertBlock(v, '---') },
 ];
 
-export default function EditorToolbar({ viewRef }) {
+export default function EditorToolbar({ viewRef, ai }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 2,
@@ -302,6 +302,23 @@ export default function EditorToolbar({ viewRef }) {
         viewRef={viewRef}
       />
       <ColumnPicker viewRef={viewRef} />
+
+      {ai && (
+        <>
+          <div style={{ width: 1, height: 16, background: 'var(--border)', margin: '0 4px' }} />
+          <button
+            title={`AI assist — draft this ${ai.label?.label ?? 'entity'} from its template`}
+            onMouseDown={e => { e.preventDefault(); ai.onAssist?.(); }}
+            style={{
+              padding: '2px 10px', fontSize: 12, border: 'none',
+              background: 'rgba(124,106,247,0.12)', color: 'var(--accent)',
+              fontWeight: 600, cursor: 'pointer', borderRadius: 3,
+            }}
+          >
+            ✦ AI Assist
+          </button>
+        </>
+      )}
     </div>
   );
 }

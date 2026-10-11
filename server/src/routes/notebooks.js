@@ -379,7 +379,8 @@ router.get('/:id/content/*path', async (req, res) => {
       return res.status(404).json({ error: 'Note not found' });
     }
     const content = await readNote(access.ownerId, notePath);
-    res.json({ content });
+    const symbol = getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id = ? AND path = ?').get(access.ownerId, notePath)?.entity_symbol ?? null;
+    res.json({ content, entity_symbol: symbol });
   } catch (e) {
     const status = e.status ?? 404;
     res.status(status).json({ error: status < 500 ? e.message : 'Internal server error' });

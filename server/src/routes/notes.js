@@ -72,8 +72,10 @@ function notePath(req) {
 
 router.get('/*path', async (req, res) => {
   try {
-    const content = await readNote(req.user.sub, notePath(req));
-    res.json({ content });
+    const p = notePath(req);
+    const content = await readNote(req.user.sub, p);
+    const symbol = getDb().prepare('SELECT entity_symbol FROM notes WHERE user_id = ? AND path = ?').get(req.user.sub, p)?.entity_symbol ?? null;
+    res.json({ content, entity_symbol: symbol });
   } catch (e) {
     const status = e.status ?? 404;
     res.status(status).json({ error: status < 500 ? e.message : 'Internal server error' });

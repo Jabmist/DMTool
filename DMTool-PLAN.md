@@ -743,24 +743,81 @@ Consequences for subtasks (fold in):
       and a CodeMirror `override` merge conflict from two `autocompletion()` extensions → merged to
       one. See commit after this phase.)
 
-## 5. Phase 3 — AI assist [ ]
+## 5. Phase 3 — AI assist [x]  (done 2026-10-10)
 
-- [ ] `server/src/services/aiService.js`: add `draftEntity({symbol, name, extra})`:
-      system prompt = that type's template (from entity_templates) as the fill-in shape +
-      "you are a D&D DM assistant; fill plausible, in-character detail; return markdown
-      matching the template sections" + name as given. Reuse existing Ollama chat loop,
-      streaming, budgets, warm path.
-- [ ] `routes/entityTypes.js`: `POST /:symbol/draft` → create `jobs` row (reuse jobService +
-      WS progress exactly like `routes/dissect.js`) → final content streamed;
-      `POST /draft/:jobId/apply` optionally writes/updates the note body.
-- [ ] Client: `EditorToolbar` "AI assist" button (visible when note is an entity —
-      determined by `entity_symbol` from the note GET payload) → panel reusing
-      `DissectPanel.jsx` patterns (progress, preview/edit the draft, Apply / Discard),
-      simplified to a single content blob (no multi-note approval).
-- [ ] Server test: job lifecycle with a stubbed Ollama (mirror existing dissect tests).
-- [ ] Keep existing dissect/import feature untouched (retained, works for free).
+- [x] `server/src/services/aiService.js`: `draftEntity({symbol, name, extra})`.
+  System prompt = the type's `defaultTemplate` as the fill-in shape + "you are a
+  D&D DM assistant; fill plausible, in-character detail; return markdown matching the
+  template sections" + name as given. Streams via a new `runDraftTurn` (reuses the
+  `/api/chat` streaming transport, no `DISSECT_TOOL`, no note normalization — a single
+  markdown body is what we want, and normalizing would mangle blank lines/emphasis).
+  Same budget / timeout / continue-after-timeout shape as `dissectNote`; `normalizeDraft`
+  unwraps a JSON-wrapped payload but never JSON-repairs prose.
+- [x] `routes/entityTypes.js`: `POST /:symbol/draft` → `createJob('entity_draft')` +
+  `runDraftEntityJob` (jobService, reuses `jobs` table + WS `job:*` events exactly like
+  dissect) → 202 `{jobId}`. Plus `GET /draft/:jobId` (poll fallback), `/draft/:jobId/cancel`,
+  `/draft/:jobId/continue`, and `POST /draft/:jobId/apply` — writes the (edited) draft to
+  `entities/<type>/<name>.md`, preserving the `entity:` frontmatter, and re-indexes. A
+  `POST /warm` reuses the dissect model warm-up. The draft/target **path and symbol are
+  stored on the job `input`** (from `entityPath`), so `/apply` writes the right note
+  without needing the shared-notebook context (the draft is tied to the entity the AI
+  button was pressed on).
+- [x] Note GET payloads now return `entity_symbol`: `routes/notes.js` `GET /*path` and
+  `routes/notebooks.js` `GET /:id/content/*path` include `entity_symbol` (the client uses
+  it to gate the AI-Assist button to entity notes only, per plan §5).
+- [x] Client: `EditorToolbar` "✦ AI Assist" button (visible only when the note is an
+  entity — `entity` resolved from `entity_symbol` + the client `symbolPalette` registry;
+  hidden for plain notes) → `components/editor/EntityDraftPanel.jsx` (reuses DissectPanel
+  patterns: warm-up, 1s elapsed tick, optional "extra direction", processing/cancel,
+  waiting_continue/continue, preview edit, **Apply to note / Discard**) → in `Editor.jsx`
+  the panel replaces the editor area while open; on apply → `onAiComplete` re-loads the
+  note (Editor `loadKey` prop). `VaultPage.jsx` holds the shared `draftJob` state, a WS
+  effect (mirrors the dissect one, single `content` instead of `notes`) + polling fallback.
+- [x] Server tests: `entityDraft.routes.test.js` (draft job lifecycle with stubbed
+  `aiService` — submit/preview/apply/cancel/continue, entity_symbol on note payloads) and
+  `aiService.test.js` (`draftEntity` + `normalizeDraft` units, streaming via fetch stub).
+- [x] Client test: `entityDraft.test.jsx` (panel form/preview/processing/failed + the
+  toolbar AI button show/hide). `npm run test` green: server 372, client 90.
+- [x] Keep existing dissect/import feature untouched (retained, works for free).
 
-## 6. Phase 4 — Deploy (later, on Steve's go) [ ]
+## 6. Phase 4 — AI entity generation [ ]  (next — requested 2026-10-11)
+
+Goal: generate an entity **from scratch** with AI (Phase 3 only fills in an
+existing note). In the **AI Dissection panel** the user selects the entity
+type, enters the entity's primary name, and gives a brief description. The AI
+writes the primary entity **and** any related entities it needs (locations,
+items, NPCs…) as new notes, linking to the user's **existing** entities where a
+name fits. The user reviews / edits / discards each proposed note, then applies
+the whole set into the vault as properly classified entity notes. Old Phase 4
+(deploy) is Phase 5 below.
+
+### 6a. Locked decisions
+
+| # | Decision |
+|---|----------|
+| D4-1 | UX: a second mode inside the existing Dissect view — `DissectPanel` gains "Dissect" / "Generate entity" tabs (Steve: "on the AI disect panel"). One shared panel-level job state, extended with `kind: 'dissect' \| 'generate'`, so the existing WS/poll plumbing in `VaultPage` is reused. New job **type** `entity_generate` (distinct from `dissect` and `entity_draft`). |
+| D4-2 | Input: `{symbol, name, description?}`. `symbol` must be one of the six (else 404); `name` required and must pass `safeEntityName` (400 if not); `description` optional free text. If a note with `name`'s title **already exists** → **409 at submit** with a hint to use Phase 3 AI Assist on that note instead. |
+| D4-3 | Context/roster: the server builds a roster of the user's existing entity notes — titles grouped by type, **capped at 30 per type**, `ORDER BY title`, from `notes WHERE entity_symbol IS NOT NULL` — and puts it in the prompt. Instruction: **link only to names that appear in the roster**; any related entity that must be named and is not in the roster must be proposed as a new note in the response, with its own type. |
+| D4-4 | Output contract: tool call `produce_entity_notes` → `notes: [{title, content, symbol}]`, `symbol` ∈ the six; **exactly one** note has `symbol == selected type` and `title == the user's name` (the primary). Related notes may be any of the six types, any number (including zero). Content uses the locked symbol-link syntax (D1/D2). |
+| D4-5 | AI plumbing: new `generateEntity({symbol, name, description, roster}, {budget, signal, initialMessages})` in `aiService.js` — same budget / turn loop / continue-after-timeout shape as `dissectNote` (it is multi-note, use the tool-call path like `runTurn`, not `runDraftTurn`). Fill-in shape = the primary type's `defaultTemplate`; related types get their **headings only** (strip the `_italic hints_`) to keep the prompt small. `normalizeEntityNotes()` validates `title`+`content`+`symbol` per note. |
+| D4-6 | Preview = dissect-style: one card per proposed note — type badge, editable **title** and **content**, Discard. If a proposed title collides with an existing user note, show a warning badge. **Apply is strict**: any collision on apply → **409 naming the offending titles** (user renames or discards those cards). No append/overwrite mode — this preserves the Q6 title-uniqueness invariant. |
+| D4-7 | Apply writes all approved notes: `safeEntityName` each title (400), re-check duplicates (409), `entityPath(type, safeTitle)` (Q4), `entity:` frontmatter (Q8), `indexNote`, file into the type's seed notebook (Q3, idempotent). Validate **all** notes before writing any; a write failure mid-batch marks the job `failed` with the error (no silent partial success in the UI). Response `{ written: [{path, name, symbol}] }`. |
+| D4-8 | Endpoints, all under the existing `/api/entity-types` router (auth required, reuse `draftLimiter`-style limiter): `POST /generate` (202 `{jobId}`), `GET /generate/:jobId` (poll), `POST /generate/:jobId/cancel`, `POST /generate/:jobId/continue`, `POST /generate/:jobId/apply {notes}`. **Route-order gotcha:** register the `generate` routes **before** `POST /:symbol` (Express matches in order; `generate` would otherwise be swallowed as a symbol and 404), same trick `/warm` already uses. |
+| D4-9 | Reuse, don't duplicate: `GET /api/entity-types` supplies the six types for the form's selector; `warmModel()` (`POST /warm`) for model preload; `jobService` broadcast/`runningJobs`-map pattern for lifecycle; `ensureSeedData` before apply. Phase 3 (`entity_draft`) is untouched. |
+
+### 6b. Subtasks
+
+| ID | Subtask |
+|----|---------|
+| 4.1 | `server/src/services/aiService.js`: `PRODUCE_ENTITY_NOTES` tool schema; `generateEntity()` (roster-aware system prompt: primary template full, related-types headings, roster, "link only roster names, propose the rest as notes" rule); `normalizeEntityNotes()`. Unit tests: valid set (primary + 2 related), bad symbol rejected, missing title/content rejected, roster present in prompt. |
+| 4.2 | `server/src/services/jobService.js`: `runGenerateEntityJob` (mirror `runDissectJob`: budget-0 + grant-per-attempt, waiting_continue, cancel; on success mark `preview` with the notes + per-note `collision` flag from `SELECT 1 FROM notes WHERE user_id=? AND title=?`), `cancelGenerateJob`, `continueGenerateJob`. |
+| 4.3 | `server/src/routes/entityTypes.js`: the five `generate` endpoints (D4-8) — submit validation per D4-2 (order: symbol 404 → name 400 → dup 409 → 202), roster builder (30/type cap), apply per D4-6/D4-7. Register before `POST /:symbol`. |
+| 4.4 | Client: `DissectPanel.jsx` mode tabs; Generate form (type selector from `GET /api/entity-types`, name input, description textarea); extend the job state object with `kind`; preview cards gain a type badge + collision warning + editable title; Approve posts to `/api/entity-types/generate/:jobId/apply`. Existing Dissect flow unchanged when `kind === 'dissect'`. |
+| 4.5 | `client/src/pages/VaultPage.jsx`: branch the job WS-effect and poll-fallback on `kind` (poll URL `/api/entity-types/generate/:jobId` vs `/api/dissect/:jobId`); sidebar/notebooks refresh on `complete` for both kinds (lift the current dissect-only refresh effect). |
+| 4.6 | `client/src/pages/helpContent.js`: add a "Generate an entity" line to the AI/Entities help (mode, inputs, that related entities are proposed with the primary). |
+| 4.7 | Tests: `server/src/__tests__/entityGenerate.routes.test.js` (submit 400/404/409/202; lifecycle with stubbed `aiService.generateEntity` — preview notes carry `collision`; apply happy path → N notes at `entities/<type>/<name>.md` with `entity:` frontmatter + `notes.entity_symbol` + seed-notebook filing; apply collision → 409 before any write; cancel; poll shape) + `client` DissectPanel generate-mode tests (tabs, disabled submit without name, preview render, collision badge). `npm run test` green → commit. |
+
+## 7. Phase 5 — Deploy (later, on Steve's go) [ ]
 
 - [ ] New private GitHub repo `Jabmist/DMTool`; first push `.32`→GitHub (account token helper).
 - [ ] `.202`: new system user + `/opt/dmtl/{app,data}` (mirror obsidian layout);
@@ -786,7 +843,7 @@ Consequences for subtasks (fold in):
 
 ---
 
-## 7. Cross-cutting rules (every session)
+## 8. Cross-cutting rules (every session)
 
 - Test command: `npm run test` (server vitest + client vitest) in the DMTool repo. Must be
   green before moving to next task; never "fix later".
@@ -798,10 +855,10 @@ Consequences for subtasks (fold in):
 - This plan file stays in the Obsidian repo (baseline's workspace); when the fork proves
   stable, consider moving it into `DMTool/` and re-committing history accordingly.
 
-## 8. Open questions (ask Steve when they bite)
+## 9. Open questions (ask Steve when they bite)
 
-- Public path for deploy (`/dmtool/` suggested) — Phase 4.
-- `.202` service user name for DMTool (`dmtl` suggested) — Phase 4.
+- Public path for deploy (`/dmtool/` suggested) — Phase 5.
+- `.202` service user name for DMTool (`dmtl` suggested) — Phase 5.
 - Templates content: **Q2 (2026-10-05) RESOLVED** — the six starter templates (with Steve's
   Event/Location/NPC adjustments) are the locked seed content in §3b. Still per-user editable at
   runtime via `/api/templates`.

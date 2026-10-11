@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { getDb } from '../db/index.js';
-import { dissectNote, makeBudget, REQUEST_TIMEOUT_MS } from './aiService.js';
+import { dissectNote, draftEntity, makeBudget, REQUEST_TIMEOUT_MS } from './aiService.js';
 import { broadcast } from '../ws/index.js';
 
 export function createJob(userId, type, input) {
@@ -116,6 +116,85 @@ export function runDissectJob(jobId, userId, rawText) {
     });
 
   return new Promise(() => {}); // never settles; lifecycle lives in the job row
+}
+
+// A separate in-flight map so entity drafts and dissections don't share
+// controller/resume state. Same "continue after timeout" shape as dissect.
+const draftJobs = new Map();
+
+export function runDraftEntityJob(jobId, userId, opts) {
+  const entry = { controller: new AbortController(), cancelled: false, resolveDecision: null, rejectDecision: null };
+  draftJobs.set(jobId, entry);
+
+  const finish = (status, error) => {
+    if (status === 'failed' && (!error || !/cancelled/i.test(error))) {
+      console.error(`[draft] job ${jobId} failed:`, error);
+    } else {
+      console.log(`[draft] job ${jobId} → ${status}`);
+    }
+    updateJob(jobId, { status, ...(error ? { error } : {}) });
+    const type = status === 'cancelled' ? 'job:cancelled' : 'job:failed';
+    broadcast(userId, { type, jobId, error });
+  };
+
+  (async () => {
+    const budget = makeBudget(0);
+    updateJob(jobId, { status: 'processing' });
+    broadcast(userId, { type: 'job:processing', jobId, timeoutMs: REQUEST_TIMEOUT_MS });
+
+    let draft;
+    let initialMessages = null;
+    for (;;) {
+      if (entry.cancelled) throw Object.assign(new Error('Cancelled by user'), { cancelled: true });
+      budget.grantMoreTime(REQUEST_TIMEOUT_MS);
+      try {
+        draft = await draftEntity(opts, { budget, signal: entry.controller.signal, initialMessages });
+        break;
+      } catch (e) {
+        if (entry.cancelled || e?.cancelled || e?.name === 'AbortError') throw Object.assign(new Error('Cancelled by user'), { cancelled: true });
+        if (e?.name !== 'TimeoutError') throw e;
+        initialMessages = e.partialMessages ?? initialMessages;
+        updateJob(jobId, { status: 'waiting_continue' });
+        broadcast(userId, { type: 'job:waiting_continue', jobId });
+        await new Promise((resolve, reject) => {
+          entry.resolveDecision = resolve;
+          entry.rejectDecision = reject;
+        }).catch(err => { throw err; });
+        entry.controller = new AbortController();
+      }
+    }
+    console.log(`[draft] job ${jobId} got draft (${draft.length} chars)`);
+
+    updateJob(jobId, { status: 'preview', result: JSON.stringify({ content: draft }) });
+    broadcast(userId, { type: 'job:preview', jobId, content: draft });
+  })()
+    .catch(e => {
+      const cancelled = entry.cancelled || e?.cancelled === true || /cancelled/i.test(String(e?.message));
+      finish(cancelled ? 'cancelled' : 'failed', e?.message ?? String(e));
+    })
+    .finally(() => {
+      draftJobs.delete(jobId);
+    });
+
+  return new Promise(() => {});
+}
+
+export function cancelDraftEntityJob(jobId) {
+  const entry = draftJobs.get(jobId);
+  if (!entry) return false;
+  entry.cancelled = true;
+  entry.rejectDecision?.(Object.assign(new Error('Cancelled by user'), { cancelled: true }));
+  entry.controller?.abort('cancelled');
+  return true;
+}
+
+export function continueDraftEntityJob(jobId) {
+  const entry = draftJobs.get(jobId);
+  if (!entry) return false;
+  const resolve = entry.resolveDecision;
+  entry.resolveDecision = null;
+  resolve?.();
+  return true;
 }
 
 export function cancelDissectJob(jobId) {

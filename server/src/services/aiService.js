@@ -1,4 +1,5 @@
 import { jsonrepair } from 'jsonrepair';
+import { bySymbol, defaultTemplate } from '../entityTypes.js';
 
 // Local Ollama server (OpenAI-compatible /api/chat). Point these at your setup.
 const OLLAMA_BASE = (process.env.OLLAMA_BASE_URL ?? 'http://192.168.1.173:11434').replace(/\/+$/, '');
@@ -255,6 +256,132 @@ export async function dissectNote(rawText, { timeoutMs = REQUEST_TIMEOUT_MS, bud
     `last assistant content: ${JSON.stringify(trunc(messages.filter(m => m.role === 'assistant').pop()?.content))} ` +
     `last user prompt: ${JSON.stringify(trunc(messages.filter(m => m.role === 'user').pop()?.content, 300))}`);
   throw new Error('Model did not return notes (model=' + OLLAMA_MODEL + '). See [ai] logs for the raw output.');
+}
+
+// A single-entity draft returns one markdown body, so it streams the assistant
+// content verbatim (no DISSECT_TOOL, no note normalization — normalizing here
+// would mangle blank lines / emphasis in the markdown).
+async function runDraftTurn(messages, signal) {
+  const lastUser = messages.filter(m => m.role === 'user').pop();
+  aiLog(`runDraftTurn start model=${OLLAMA_MODEL} msgs=${messages.length} ` +
+    `lastUser=${trunc(lastUser?.content, 200)}`);
+  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: OLLAMA_MODEL, stream: true, temperature: 0, max_tokens: MAX_TOKENS, messages }),
+    signal,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    await res.body?.cancel().catch(() => {});
+    throw new Error(`Ollama returned HTTP ${res.status}: ${detail.slice(0, 200)}`);
+  }
+  if (!res.body) throw new Error('Ollama returned no response body');
+
+  let content = '';
+  let eventCount = 0;
+  for await (const line of streamLines(res.body)) {
+    if (!line) continue;
+    for (const evt of NDJSON_EVENTS(line)) {
+      eventCount++;
+      if (evt?.message?.content) content += evt.message.content;
+      if (evt?.done_error) throw new Error(String(evt.done_error));
+    }
+  }
+  aiLog(`runDraftTurn stream done events=${eventCount} contentLen=${content.length}`);
+  return { content };
+}
+
+// ── Entity AI draft (Phase 3) ────────────────────────────────────────────────
+// Fill a single entity's details. Unlike dissection this returns ONE markdown
+// body, so it reuses the streaming chat transport but returns the plain message
+// text (no tool schema). The system prompt sets the type's template as the
+// fill-in shape so the draft follows the author's sections.
+const ENTITY_SYSTEM_PROMPT = (type, name) => `You are a Dungeon & Dragons DM assistant. Create a rich, plausible, in-character sketch of a ${type.label} for the campaign.
+
+THE ENTITY: ${type.label} "${name}"
+
+FILL-IN SHAPE — follow these sections and their relative order (use these exact headings; drop any section that has nothing to add, and you may add a short free-text line under a heading where prose fits better than bullets). Where a section should reference another entity, link it using the doubled-symbol syntax for that type: !!Event!!, @@Location@@, &&NPC&&, $$Item$$, ^^Trap^^, ++Player++.
+${defaultTemplate(type.name)}
+
+RULES:
+- Return ONLY the completed markdown body. Do NOT add a title line, code fences, or commentary — the note's title is already "${name}".
+- Write for a DM's quick reference: concrete, evocative, campaign-ready. Invent specifics (names, numbers, DCs, moods) that a DM could run tonight.
+- Keep cross-references as the symbol links above so the tool can wire them up.`;
+
+export function normalizeDraft(source) {
+  // A draft is a single markdown string. Only some models wrap it in a JSON
+  // payload — unwrap those forms, but never run a JSON *repair* on what looks
+  // like prose (that would mangle blank lines / emphasis).
+  const asArr = Array.isArray(source) ? source : null;
+  const candidate = typeof source === 'string'
+    ? (source.startsWith('{') || source.startsWith('[') ? parseJsonish(source) : source)
+    : source;
+
+  let out;
+  if (typeof candidate === 'string') {
+    out = candidate;
+  } else if (Array.isArray(candidate)) {
+    out = candidate.map(n => (n && typeof n.content === 'string') ? n.content : String(n)).join('\n');
+  } else if (typeof candidate === 'object' && candidate !== null) {
+    const body = candidate.content ?? candidate.draft ?? candidate.body ?? candidate.note;
+    if (typeof body === 'string') out = body;
+    else if (Array.isArray(body)) out = body.map(n => (n && n.content) ? String(n.content) : String(n)).join('\n');
+  }
+  if (out === undefined || out === null) out = asArr ? asArr.map(n => (n && n.content) ? String(n.content) : String(n)).join('\n') : '';
+  out = String(out).trim();
+  if (!out) throw new Error('Model returned no content for the entity draft.');
+  return out;
+}
+
+export async function draftEntity({ symbol, name, extra = '' }, { timeoutMs = REQUEST_TIMEOUT_MS, budget = null, signal, initialMessages = null } = {}) {
+  const type = bySymbol(symbol);
+  if (!type) throw new Error(`Unknown entity symbol: ${symbol}`);
+  const b = budget ?? makeBudget(timeoutMs);
+  let messages = initialMessages ?? [
+    { role: 'system', content: ENTITY_SYSTEM_PROMPT(type, name) },
+    { role: 'user', content: name ? `Draft the ${type.label} "${name}".${extra ? `\n\nAdditional direction from the DM: ${extra}` : ''}` : `Draft a ${type.label}.` },
+  ];
+
+  for (let turn = 1; turn <= MAX_TURNS; turn++) {
+    if (signal?.aborted) throw abortError(signal);
+    if (b.remainingMs() <= 0) throw makeTimeoutError(b.chunkMs, messages);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), b.remainingMs());
+    const onOuterAbort = () => controller.abort();
+    signal?.addEventListener('abort', onOuterAbort, { once: true });
+    let out;
+    try {
+      out = await runDraftTurn(messages, controller.signal);
+    } catch (e) {
+      if (signal?.aborted) throw abortError(signal);
+      if (controller.signal.aborted) throw makeTimeoutError(b.chunkMs, messages);
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onOuterAbort);
+    }
+
+    let body;
+    try {
+      body = normalizeDraft(out.content);
+    } catch (e) {
+      if (!out.content) { aiLog(`draftEntity turn ${turn}: empty response — stopping loop`); break; }
+      // A valid turn came back but it isn't markdown yet — nudge and continue.
+      aiLog(`draftEntity turn ${turn}: not draft-shaped yet (${e.message}) — continuing`);
+    }
+    if (body) {
+      aiLog(`draftEntity turn ${turn}: got draft (${body.length} chars)`);
+      return body;
+    }
+    messages.push({ role: 'assistant', content: out.content });
+    messages.push({
+      role: 'user',
+      content: 'Keep going. Return the FULL completed markdown body for the entity now — all sections, no placeholders.',
+    });
+  }
+  aiErr(`draftEntity EXHAUSTED (model=${OLLAMA_MODEL}, maxTurns=${MAX_TURNS}) for ${type.label} "${name}".`);
+  throw new Error('Model did not return an entity draft (model=' + OLLAMA_MODEL + '). See [ai] logs for the raw output.');
 }
 
 // ── Model preload (warm-up) ──────────────────────────────────────────────────

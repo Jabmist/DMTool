@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { normalizeNotes, dissectNote, makeBudget, warmModel } from '../services/aiService.js';
+import { normalizeNotes, dissectNote, makeBudget, warmModel, draftEntity, normalizeDraft } from '../services/aiService.js';
 
 describe('normalizeNotes', () => {
   it('accepts a parsed object arguments payload', () => {
@@ -266,5 +266,80 @@ describe('warmModel (preload)', () => {
     // The slot was re-armed: a new promise, and a second HTTP call happens.
     await next;
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('normalizeDraft', () => {
+  it('returns a plain markdown string as-is', () => {
+    expect(normalizeDraft('## Summary\n\nA brave knight.')).toBe('## Summary\n\nA brave knight.');
+  });
+
+  it('unwraps an object payload with a content field', () => {
+    expect(normalizeDraft(JSON.stringify({ content: '## Body' }))).toBe('## Body');
+    expect(normalizeDraft({ content: '## Body' })).toBe('## Body');
+  });
+
+  it('rejects an empty/missing body', () => {
+    expect(() => normalizeDraft('')).toThrow(/no content/i);
+    expect(() => normalizeDraft({ foo: 1 })).toThrow(/no content/i);
+    expect(() => normalizeDraft(undefined)).toThrow(/no content/i);
+  });
+});
+
+describe('draftEntity', () => {
+  function streamResponse(chunks, { status = 200 } = {}) {
+    const payload = chunks.join('\n');
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    });
+    return { ok: status >= 200 && status < 300, status, text: async () => 'internal error', body: stream };
+  }
+  const doneEvent = JSON.stringify({ done: true, done_reason: 'stop' });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('returns the model\'s markdown body (content fallback) with the type in the system prompt', async () => {
+    const draft = '## Description\n\nA scarred, quiet rogue. Lives at @@The Allhands Bar@@ and carries $$The Iron Sigil$$.';
+    globalThis.fetch = vi.fn().mockResolvedValue(streamResponse([
+      JSON.stringify({ message: { content: draft }, done: true }),
+      doneEvent,
+    ]));
+    const out = await draftEntity({ symbol: '&', name: 'Borg the Black' });
+    expect(out).toBe(draft);
+
+    const [url, opts] = globalThis.fetch.mock.calls[0];
+    expect(url).toMatch(/\/api\/chat$/);
+    const body = JSON.parse(opts.body);
+    expect(body.tools).toBeUndefined();
+    expect(body.messages[0].role).toBe('system');
+    expect(body.messages[0].content).toMatch(/Dungeon & Dragons DM assistant/);
+    expect(body.messages[0].content).toContain('NPC');
+    expect(body.messages[0].content).toContain('Borg the Black');
+    expect(body.messages[1].content).toContain('Borg the Black');
+  });
+
+  it('preserves blank lines (no note-normalization mangling)', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(streamResponse([
+      JSON.stringify({ message: { content: '## Description\n\nA scarred, quiet rogue.' }, done: true }),
+      doneEvent,
+    ]));
+    expect(await draftEntity({ symbol: '&', name: 'Borg the Black' }))
+      .toBe('## Description\n\nA scarred, quiet rogue.');
+  });
+
+  it('passes extra DM direction into the user message', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(streamResponse([
+      JSON.stringify({ message: { content: '## Summary\n\nok' }, done: true }),
+      doneEvent,
+    ]));
+    await draftEntity({ symbol: '!', name: 'Council Summit', extra: 'make it tense' });
+    const [ , opts] = globalThis.fetch.mock.calls[0];
+    expect(JSON.parse(opts.body).messages[1].content).toMatch(/tense/i);
+  });
+
+  it('404s (throws) on an unknown symbol', async () => {
+    await expect(draftEntity({ symbol: '#', name: 'X' })).rejects.toThrow(/Unknown entity symbol/i);
   });
 });
