@@ -1,4 +1,4 @@
-# DMTool — Handoff (2026-10-04)
+# DMTool — Handoff (updated 2026-10-12)
 
 Read this top-to-bottom to get fully up to speed. Current *state* is read from git
 (`git log`, `git status`, the phase checkboxes in `DMTool-PLAN.md` at repo root); this
@@ -13,7 +13,7 @@ web-based Markdown notebook: notes, notebooks, sharing, `[[wikilinks]]`, graph, 
 Dissect, import). The fork is at **`/home/steve/source/DMTool`** (this repo). The
 baseline (`/home/steve/source/Obsidian`) is untouched and stays the reference.
 
-The DMTool layer (not yet built — Phases 1–3) adds **typed entities** for a campaign:
+The DMTool layer (Phases 1–3) adds **typed entities** for a campaign:
 each game "entity" kind gets a notebook, a template, symbol-based links, and AI-assist
 when filling in details. See §6 for the locked spec.
 
@@ -40,7 +40,7 @@ Useful root scripts: `npm run dev`, `npm run build`, `npm run start`, `npm run t
 - `.env` (gitignored) — data paths point at **the fork's own** `data/` (independent of the
   baseline, deliberately):
   ```
-  NODE_ENV=production  PORT=3000
+  NODE_ENV=production  PORT=3001
   VAULT_ROOT=/home/steve/source/DMTool/data/vaults
   UPLOAD_TMP=/home/steve/source/DMTool/data/uploads
   DB_PATH=/home/steve/source/DMTool/data/dmtl.db   # new/empty SQLite DB
@@ -52,15 +52,14 @@ Useful root scripts: `npm run dev`, `npm run build`, `npm run start`, `npm run t
 - `data/` is gitignored (vaults/uploads/backups/*.db). The `data/dmtl.db` file is a fresh,
   empty per-fork database (the backup *archive member name* inside a backup is still literally
   `obsidian.db` — that's an internal naming constant in `backupService.js`, not the file path).
-- **Port collision to be aware of**: the baseline Obsidian dev server is often running and
-  holds **3000 + 5173**. DMTool's default dev also wants 3000, so it collides. To run DMTool
-  side-by-side with the baseline (commit `cc51a5b` made this clean):
-  ```
-  PORT=3042 DMTL_API_ORIGIN=http://localhost:3042 npm run dev
-  ```
-  Vite auto-bumps to 5174 when 5173 is taken. `DMTL_API_ORIGIN` (default `http://localhost:3000`)
-  is read in `client/vite.config.js` and overrides both `/dmtool/api` and `/dmtool/ws` proxy
-  targets. **Production is unaffected** (nginx + server use `.env`, not this var).
+- **Port layout**: the baseline Obsidian dev server owns **3000 + 5173**. DMTool is pinned to
+  **3001** so it does not collide: `.env` sets `PORT=3001` and `client/vite.config.js`'s
+  `DMTL_API_ORIGIN` defaults to `http://localhost:3001` (commit `cc51a5b` made the proxy target
+  env-overridable). So DMTool runs side-by-side with the baseline with a plain `npm run dev` —
+  server on 3001, Vite auto-bumps to 5174 when the baseline holds 5173. `DMTL_API_ORIGIN` (read in
+  `client/vite.config.js`) still overrides both `/dmtool/api` and `/dmtool/ws` proxy targets if you
+  ever want to move it (e.g. `PORT=3042 DMTL_API_ORIGIN=http://localhost:3042 npm run dev`).
+  **Production is unaffected by this dev-only var** (nginx + server use `.env`, not this var).
 
 ### Dev loop (`.32`, this box)
 ```
@@ -72,7 +71,7 @@ edit  →  npm run dev (in repo root)  →  npm run test   →  git add/commit
 
 ---
 
-## 4. Deployment pipeline (for later — Phase 4)
+## 4. Deployment pipeline (Phase 5 — for later)
 
 Not deployed yet. When it is, mirror the `obsidian-web` pattern (documented in the baseline's
 `handoff2.md` and `SETUP.md`, both also copied into this repo's context):
@@ -155,7 +154,7 @@ grep -o 'dmtool/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dmtool/index.html   # 
   | `^` | trap     | `^^Name^^`   |                                          |
   | `+` | player   | `++Name++`   | was `*` — `**bold**` collides            |
 
-  `#` (NCP) and `*` (player) were replaced precisely because of those collisions. **Do not use
+   `#` (npc) and `*` (player) were replaced precisely because of those collisions. **Do not use
   `#` or `*`.**
 - **Editing UX** (Phase 2): the user types the double-symbol pair (e.g. `&&`) → a picker
   appears listing that type's existing notes plus a **"new"** option. Existing → insert the
@@ -167,49 +166,54 @@ grep -o 'dmtool/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dmtool/index.html   # 
   existing Ollama-backed `services/aiService.js` / dissect job + WebSocket plumbing).
 - **Keep all baseline features** (dissect, import, sharing, graph, admin).
 
-### Phase 1 design (agreed in the prior session, NOT yet written)
+### Phase 1 design (implemented — 2026-10-07; details in `DMTool-PLAN.md` §3)
 
 - `server/src/entityTypes.js` — single source of truth:
   `[{symbol:'!',name:'event',label:'Event'}, … {symbol:'+',name:'player',label:'Player'}]`
-  + helpers `bySymbol()`, `linkRegex(symbol)`, and a `defaultTemplate(name, symbol)` builder.
+  + helpers `bySymbol()`, `byName()`, `linkRegex(symbol)`, `seedNotebookName(label)`,
+  `entityPath(type, entityName)`, `safeEntityName(name)`, and `defaultTemplate(name, symbol)`.
   No DB needed for the registry itself.
 - `server/src/db/index.js` `runMigrations()` (additive, the repo's established pattern of
   `CREATE … IF NOT EXISTS` + guarded `ALTER`/`INSERT OR IGNORE`):
   - `ALTER TABLE notes ADD COLUMN entity_symbol TEXT` (guarded).
-  - `CREATE TABLE entity_templates (symbol TEXT PRIMARY KEY, name TEXT, label TEXT,
-    content TEXT, created_at INTEGER)` + seed one row per symbol.
+   - `ALTER TABLE templates ADD COLUMN entity_symbol TEXT` + a `CREATE UNIQUE INDEX` on
+     `templates(user_id, entity_symbol)`; one row is seeded **per user** into the existing
+     `templates` table at registration (option B — there is **no** `entity_templates` table).
 - `server/src/routes/entityTypes.js`, mounted at `/api/entity-types` in `index.js`
   (auth required):
   - `GET /` → registry.
   - `GET /:symbol/notes` → the user's notes where `entity_symbol = :symbol` (drives the picker).
-  - `POST /:symbol` → create entity: body `{name, content?}` → write `.md` under the user's
-    vault (default `entities/npc/<slug>.md`), set `entity_symbol`, index the note, optionally
-    auto-create (or reuse) that type's notebook and file the note into it. Return `{path, name, symbol}`.
-  - Note type carried **in the note frontmatter** (`type: &npc`-style key) **and/or** a `notes`
-    column, so it survives and is queryable (decide at implementation; the plan leans on a
-    `notes.entity_symbol` column + optional `entity:` frontmatter — keep it consistent with
-    `indexNote`).
-  - Templates: create per-type "Blank/NPC template" seeded rows in the existing `templates`
-    table at user registration **and** expose/edit them via the existing `/api/templates` flow
-    (or a new `entityTemplates` route) — pick one approach in Phase 1 and keep the client using it.
+   - `POST /:symbol` → create entity: body `{name, content?}` → write `.md` under the user's
+     vault (default `entities/npc/<Safe Name>.md` — the verbatim display name, see PLAN Q5),
+     set `entity_symbol`, index the note, optionally auto-create (or reuse) that type's notebook
+     and file the note into it. Return `{path, name, symbol}`.
+   - Note type carried **in the note frontmatter** (the `entity:` key, value = one of the six
+     symbols, e.g. `entity: &`) **and** the `notes.entity_symbol` column, so it survives and is
+     queryable. `indexService.js` `FRONTMATTER_ENTITY_RE = /^entity:\s*([!@&$^+])\s*$/m` reads the
+     key and stores the **symbol char** (never the name) into `notes.entity_symbol`; absent/invalid
+     → `NULL` (note becomes ordinary). This is consistent with `indexNote`.
+   - Templates: one per-type row seeded into the existing `templates` table at user registration
+     (`name = <label> Template`, `entity_symbol = <symbol>`), edited via the existing
+     `/api/templates` flow **or** the new `PUT /api/entity-types/:symbol/template` (Q7: owner-only,
+     no admin gate). No separate `entityTemplates` route.
 - Wire into **`auth.js` `register`** (and backfill for pre-existing users): on registration,
   create the six type-notebooks (or a single "Entities" notebook) + the six templates, idempotently.
 - **Server tests** (mirror existing `__tests__/*.routes.test.js` + `helpers.js` `createTestApp`):
-  round-trip create/list a type-note; picker endpoint filters correctly; register auto-creates
-  notebooks/templates. **NOTE:** two existing baseline tests assert an **empty**
-  `GET /api/notebooks` and `GET /api/templates` right after registration
-  (`notebooks.routes.test.js:70`, `templates.routes.test.js:21`). If you seed per-user
-  notebooks/templates at register (as the spec says), **these two asserts will change** — update
-  them to expect the newly-seeded items, and make the new tests assert the same. (That was the
-  open thread this handoff resolves: the prior session had just checked these two asserts before
-  writing code.)
+   round-trip create/list a type-note; picker endpoint filters correctly; register auto-creates
+   notebooks/templates. **NOTE (resolved 2026-10-07):** two baseline tests *used to* assert an
+   **empty** `GET /api/notebooks` and `GET /api/templates` right after registration — now that
+   registration seeds the six notebooks + six templates, they were updated to expect the seeded
+   items: `notebooks.routes.test.js` ("returns the six seed entity notebooks") and
+   `templates.routes.test.js` ("returns the six entity templates seeded at registration"). The new
+   Phase 1 tests assert the same seeded set.
 
 ---
 
 ## 7. Key file map (DMTool = same as baseline; only these are DMTool-specific/changed)
 
-- `client/vite.config.js` — the ONLY client file changed in the fork (env-overridable dev proxy,
-  commit `cc51a5b`). Default behaviour identical to baseline.
+- `client/vite.config.js` — the only client file changed **at the fork point** (env-overridable dev
+  proxy, commit `cc51a5b`). Default behaviour identical to baseline. (Phases 1–3 later touched more
+  client files — see the **Phase 1–3 add** bullet below.)
 - `client/src/version.js` — reset to `0.1.0` + fork changelog entry (baseline had 0.21.0).
 - `client/index.html`, `client/src/components/layout/Header.jsx`,
   `client/src/pages/helpContent.js` (INTRO line) — brand string "Obsidian Web" → "DMTool".
@@ -220,10 +224,23 @@ grep -o 'dmtool/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dmtool/index.html   # 
 - `server/src/services/backupService.js` — still names backup archives `obsidian-*.tar.gz` and
   the archive DB member `obsidian.db`; a test asserts that. Intentionally left (not branding the
   user sees).
-- Everything else: **identical to the baseline obsidian-web** (server routes, services, client
-  components). Baseline docs for reference: `SETUP.md`, `docs/nginx-notes.md`, `nginx/obsidian.conf`
-  (all copied into this repo). The baseline's `handoff2.md` (deploy pattern + credentials +
-  verification checklist) lives at `/home/steve/source/Obsidian/handoff2.md`.
+- **Phase 1–3 add** (DMTool-specific, on top of the baseline — see `DMTool-PLAN.md` §3–6 for the
+  full list + design): `server/src/entityTypes.js` (registry + helpers, new),
+  `server/src/routes/entityTypes.js` (entity routes incl. the Phase-3 AI draft, new),
+  `server/src/services/entitySeeding.js` (seed-at-register, new); edited `indexService.js`
+  (entity frontmatter parse + symbol-link extraction), `aiService.js` (`draftEntity`),
+  `jobService.js` (draft job), `routes/notes.js` + `routes/notebooks.js` (`entity_symbol` on
+  payloads; seed-notebook rename lock), `db/index.js` (migrations), `auth.js` (register seeding);
+  client (new) `components/editor/symbolLinkComplete.js` / `symbolPalette.js` / `entityLinkBridge.js` /
+  `entityLinks.js` / `EntityDraftPanel.jsx`; and edits to baseline client files
+  `components/editor/NotePreview.jsx` / `Editor.jsx` / `components/editor/EditorToolbar.jsx` /
+   `components/layout/Sidebar.jsx` / `pages/VaultPage.jsx`.
+   (`components/dissect/DissectPanel.jsx` is *not* in the set — it is Phase 4's target and
+   untouched so far.)
+- Everything **not** listed here (above in the fork bullets or the Phase 1–3 set) is **identical to
+  the baseline obsidian-web**. Baseline docs for reference: `SETUP.md`, `docs/nginx-notes.md`,
+  `nginx/obsidian.conf` (all copied into this repo). The baseline's `handoff2.md` (deploy pattern +
+  credentials + verification checklist) lives at `/home/steve/source/Obsidian/handoff2.md`.
 
 ---
 
@@ -243,17 +260,27 @@ grep -o 'dmtool/assets/index-[A-Za-z0-9_-]*\.js' /var/www/dmtool/index.html   # 
 
 ## 9. How to pick up where this left off
 
-1. You're reading `handoff.md`; next read the task list: `DMTool-PLAN.md` (repo root)
-   → §3 **Phase 1** is the next work.
-2. Re-run `npm run test` from the repo root — everything green before you start. Start the
-   server (`npm run dev`, side-by-side command in §3 if the baseline is on 3000).
-3. Implement Phase 1 per §6: `entityTypes.js` → `db` migration → `routes/entityTypes.js` +
-   mount in `index.js` → `auth.js` register/seeding → **update the two baseline
-   empty-collection test asserts** → add the new Phase 1 tests → `npm run test` green → commit.
-4. Phase 2 (client symbol-link picker + `NotePreview` entity-link preprocess + `indexService`
-   link extraction) and Phase 3 (AI-draft endpoint + toolbar/panel) follow.
-5. **Do not commit to `origin` / push** without Steve's explicit go (global rule).
-6. Keep `data/`, `.env`, `node_modules/` out of git (they're gitignored — respect that; a fresh
+Read state from git + `DMTool-PLAN.md`. As of this handoff:
+
+- **Phases 1, 2, 3 are DONE** (commits `3d272b0`, `6e3dfd1`/`eecc19c`, `bb0ac82`):
+  - Phase 1 — entity registry + `notes`/`templates` `entity_symbol` columns + unique index,
+    `/api/entity-types` routes, seed-at-register, `indexService` frontmatter parse.
+  - Phase 2 — CodeMirror symbol-link picker + `NotePreview` entity-link preprocess +
+    `indexService` link extraction + sidebar New-entity.
+  - Phase 3 — AI assist: `draftEntity` + job/WS plumbing + `EntityDraftPanel` + AI-Assist toolbar button.
+- **Phase 4 (AI entity *generation*) is NEXT** — see `DMTool-PLAN.md` §6 (locked D4-1…D4-9 + subtasks 4.1–4.7).
+- **Phase 5 (deploy) is later** and blocked on Steve (see §4 and `DMTool-PLAN.md` §7).
+
+1. Re-run `npm run test` from the repo root — everything green before you start (last green:
+   server 372 / client 90). Start the server with a plain `npm run dev` (DMTool is pinned to
+   3001, §3; the baseline owns 3000).
+2. Implement Phase 4 per `DMTool-PLAN.md` §6: `aiService.generateEntity` + tool schema →
+    `jobService.runGenerateEntityJob` → the `generate` routes in `routes/entityTypes.js`
+    (registered **before** `POST /:symbol`, D4-8) → client Generate-mode in
+    `components/dissect/DissectPanel.jsx` + `pages/VaultPage.jsx` job-state `kind` → help line →
+    tests → `npm run test` green → commit.
+3. **Do not commit to `origin` / push** without Steve's explicit go (global rule).
+4. Keep `data/`, `.env`, `node_modules/` out of git (they're gitignored — respect that; a fresh
    clone/`npm ci` recreates `node_modules`, and a fresh `data/dmtl.db` is expected to be empty).
 
 If anything here contradicts the code, **trust the code** and fix this handoff.
